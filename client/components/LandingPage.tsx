@@ -1,9 +1,13 @@
+'use client'
 import Image from "next/image";
 import img from "@/public/darkimage.jpg";
 import PrincipleSection from "./PrincipleSection";
 import Manifesto from "./Manifesto";
+import CreateRoom from "./CreateRoom";
+import { useState } from "react";
 
 const LandingPage = () => {
+  const [showCreateRoom, setShowCreateRoom] = useState<Boolean>(false)
   return (
     <main className="relative min-h-screen overflow-hidden bg-black text-white">
       {/* Background image */}
@@ -55,8 +59,8 @@ const LandingPage = () => {
 
           {/* CTA area */}
           <div className="mt-10 flex flex-col gap-3 sm:flex-row">
-            <button className="group relative overflow-hidden border border-[#00ff66]/60 bg-[#00ff66] px-7 py-3 font-mono text-xs font-bold tracking-widest text-black transition-all duration-300 hover:bg-[#00ff66]/90 hover:shadow-[0_0_30px_rgba(0,255,102,0.2)]">
-              CREATE A ROOM
+            <button className="group relative overflow-hidden border border-[#00ff66]/60 bg-[#00ff66] px-7 py-3 font-mono text-xs font-bold tracking-widest text-black transition-all duration-300 hover:bg-[#00ff66]/90 hover:shadow-[0_0_30px_rgba(0,255,102,0.2)]" onClick={() => setShowCreateRoom(true)} >
+             CREATE A ROOM
             </button>
 
             <button className="border border-white/10 bg-white/[0.03] px-7 py-3 font-mono text-xs tracking-widest text-white/60 backdrop-blur-sm transition hover:border-white/20 hover:text-white">
@@ -78,6 +82,7 @@ const LandingPage = () => {
         <span>SESSION // 001</span>
         <span>SECURE CHANNEL</span>
       </div>
+      {showCreateRoom && ( <CreateRoom onClose={() => setShowCreateRoom(false)} />)}
 
       {/* ========== principle section ========== */}
       <PrincipleSection />
