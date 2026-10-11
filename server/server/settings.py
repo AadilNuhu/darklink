@@ -14,23 +14,42 @@ import os
 from pathlib import Path
 
 import dj_database_url
-from django.db.backends import postgresql
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 load_dotenv()
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def env_bool(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-_bdr166#m)=%)^eubi$h-x3g(=*j)z1@4n=z$@**o99aipmcpy'
-
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = env_bool('DJANGO_DEBUG', default=True)
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
+if not SECRET_KEY and not DEBUG:
+    raise ImproperlyConfigured(
+        'DJANGO_SECRET_KEY must be configured when DJANGO_DEBUG is False.'
+    )
+SECRET_KEY = SECRET_KEY or (
+    'django-insecure-_bdr166#m)=%)^eubi$h-x3g(=*j)z1@4n=z$@**o99aipmcpy'
+)
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '').replace(',', ' ').split()
+if DEBUG:
+    ALLOWED_HOSTS += ['localhost', '127.0.0.1', '[::1]', 'testserver']
+elif not ALLOWED_HOSTS:
+    raise ImproperlyConfigured(
+        'DJANGO_ALLOWED_HOSTS must be configured when DJANGO_DEBUG is False.'
+    )
 
 
 # Application definition
@@ -41,10 +60,13 @@ INSTALLED_APPS = [
     # 'django.contrib.contenttypes',
     # 'django.contrib.sessions',
     # 'django.contrib.messages',
+    'daphne',
     'django.contrib.staticfiles',
     'rest_framework',
     'chat_app',
     'user',
+    'channels',
+
 
 
 ]
@@ -77,16 +99,40 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'server.wsgi.application'
+ASGI_APPLICATION = 'server.asgi.application'
+CHAT_CONNECTION_TIMEOUT_SECONDS = 120
+
+# Channels
+# https://channels.readthedocs.io/en/latest/topics/channel_layers.html
+REDIS_URL = os.environ.get('REDIS_URL')
+
+if REDIS_URL:
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels_redis.core.RedisChannelLayer',
+            'CONFIG': {'hosts': [REDIS_URL]},
+        },
+    }
+else:
+    # In-memory layer: single-process/dev only, not for production.
+    CHANNEL_LAYERS = {
+        'default': {'BACKEND': 'channels.layers.InMemoryChannelLayer'},
+    }
 
 
-# Database
-# https://docs.djangoproject.com/en/6.1/ref/settings/#databases
+# PostgreSQL is required in every environment, including tests. Django's test
+# runner creates a separate temporary PostgreSQL database for the test suite.
+DATABASE_URL = os.environ.get('DATABASE_URL')
+if not DATABASE_URL:
+    raise ImproperlyConfigured('DATABASE_URL must be configured.')
+if not DATABASE_URL.lower().startswith(('postgres://', 'postgresql://')):
+    raise ImproperlyConfigured('DATABASE_URL must use PostgreSQL.')
 
 DATABASES = {
     'default': dj_database_url.config(
-        default=os.environ.get('DATABASE_URL'),
+        default=DATABASE_URL,
         conn_max_age=600,
-        ssl_require=True,
+        ssl_require=DATABASE_URL.lower().startswith(('postgres://', 'postgresql://')),
     )
 }
 
@@ -131,12 +177,4 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [],
     'DEFAULT_PERMISSION_CLASSES': [],
     'UNAUTHENTICATED_USER': None,
-}
-# Email
-# https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
-
-MAILERS = {
-    'default': {
-        'BACKEND': 'django.core.mail.backends.console.EmailBackend',
-    },
 }
