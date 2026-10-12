@@ -1,192 +1,118 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, Copy, ShieldCheck, Users, X } from "lucide-react";
 
-const codeUsers = "B67H9IS0";
-const codeAdmin = "Q90F3VX9";
+const codes = [
+  {
+    label: "Code for all users",
+    hint: "Gives regular access to the room.",
+    code: "B67H9IS0",
+    Icon: Users,
+    color: "#00ff66",
+  },
+  {
+    label: "Admin access code",
+    hint: "Gives full control. Keep it private.",
+    code: "Q90F3VX9",
+    Icon: ShieldCheck,
+    color: "#fbbf24",
+  },
+];
 
-type GeneratedCodeProps = {
-  onClose: () => void;
-};
+const GeneratedCode = ({ onClose }: { onClose: () => void }) => {
+  const [copied, setCopied] = useState<string | null>(null);
 
-const GeneratedCode = ({ onClose }: GeneratedCodeProps) => {
-  const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
-  const handleCopy = async (code: string) => {
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(null), 2000);
+    return () => clearTimeout(t);
+  }, [copied]);
+
+  const copy = async (code: string) => {
     try {
       await navigator.clipboard.writeText(code);
-      setCopiedCode(code);
-
-      setTimeout(() => {
-        setCopiedCode((current) =>
-          current === code ? null : current
-        );
-      }, 2000);
+      setCopied(code);
     } catch {
-      setCopiedCode(null);
+      setCopied(null);
     }
   };
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center
-      bg-black/70 p-4 backdrop-blur-md"
-      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-md
+        bg-[radial-gradient(ellipse_at_50%_0%,rgba(0,255,102,0.14),transparent_60%),rgba(2,4,3,0.85)]"
+      onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
+      <style>{`
+        @keyframes gc-in { from { opacity: 0; transform: translateY(14px) scale(.97) } }
+        @media (prefers-reduced-motion: reduce) { .gc-in { animation: none !important } }
+      `}</style>
+
       <div
         role="dialog"
         aria-modal="true"
-        aria-labelledby="generated-code-title"
-        className="relative w-full max-w-md overflow-hidden rounded-2xl
-        border border-white/10 bg-[#0b0b0b] text-white
-        shadow-[0_0_50px_rgba(0,255,102,0.08)]
-        animate-in fade-in zoom-in-95 duration-200"
-        onClick={(e) => e.stopPropagation()}
+        aria-labelledby="gc-title"
+        className="gc-in relative w-full max-w-sm rounded-2xl border border-white/10 bg-[#080b09] p-5 text-white
+          shadow-[0_0_90px_-25px_rgba(0,255,102,0.45)]"
+        style={{ animation: "gc-in .3s cubic-bezier(.2,.8,.2,1) both" }}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between border-b
-        border-white/10 px-6 py-5">
-          <div className="flex items-center gap-3">
-            <div>
-              <h2
-                id="generated-code-title"
-                className="text-lg font-semibold tracking-tight"
-              >
-                Generated Codes
-              </h2>
-              <p className="mt-0.5 text-xs text-gray-500">
-                Share access codes with your users
-              </p>
-            </div>
-          </div>
+        <div className="absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-[#00ff66] to-transparent" />
 
+        <div className="mb-5 flex items-start justify-between">
+          <div>
+            <h2 id="gc-title" className="text-lg font-semibold tracking-tight">Your room is live</h2>
+            <p className="text-sm text-white/50">Share a code to let people in.</p>
+          </div>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close modal"
-            className="rounded-lg p-2 text-gray-400 transition
-            hover:bg-white/10 hover:text-white cursor-pointer"
+            aria-label="Close"
+            className="rounded-lg p-1.5 text-white/40 transition hover:bg-red-600 cursor-pointer hover:text-white
+              focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff66]/60"
           >
-            <X size={20} />
+            <X size={18} />
           </button>
         </div>
 
-        {/* Content */}
-        <div className="space-y-5 p-6">
-          {/* User Code */}
-          <div>
-            <div className="mb-2 flex items-center gap-2">
-              <Users size={16} className="text-[#00ff66]" />
-              <label className="text-sm font-medium text-gray-200">
-                Code for all users
-              </label>
+        <div className="space-y-4">
+          {codes.map(({ label, hint, code, Icon, color }) => (
+            <div key={code}>
+              <div className="mb-1.5 flex items-center gap-2 text-sm text-gray-200">
+                <Icon size={15} style={{ color }} />
+                {label}
+              </div>
+
+              <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] p-2">
+                <span
+                  className="flex-1 pl-2 font-mono text-lg font-semibold tracking-[0.25em]"
+                  style={{ color }}
+                  aria-label={code.split("").join(" ")}
+                >
+                  {code}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => copy(code)}
+                  style={{ backgroundColor: color }}
+                  className="flex w-24 items-center justify-center gap-1.5 rounded-lg py-2 text-sm font-semibold text-black
+                    transition hover:brightness-110 active:scale-95
+                    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                >
+                  {copied === code ? <Check size={14} /> : <Copy size={14} />}
+                  {copied === code ? "Copied" : "Copy"}
+                </button>
+              </div>
+
+              <p className="mt-1.5 text-xs text-white/45">{hint}</p>
             </div>
-
-            <div className="flex items-center justify-between gap-3
-            rounded-xl border border-white/10 bg-white/[0.03] p-3
-            transition hover:border-[#00ff66]/40">
-              <span className="pl-1 font-mono text-lg font-semibold
-              tracking-[0.15em] text-white">
-                {codeUsers}
-              </span>
-
-              <button
-                type="button"
-                onClick={() => handleCopy(codeUsers)}
-                className="flex shrink-0 items-center gap-2 rounded-lg
-                bg-[#00ff66] px-3 py-2 text-sm font-semibold
-                text-black transition hover:bg-[#00e65c]
-                active:scale-95"
-              >
-                {copiedCode === codeUsers ? (
-                  <>
-                    <Check size={15} />
-                    Copied
-                  </>
-                ) : (
-                  <>
-                    <Copy size={15} />
-                    Copy
-                  </>
-                )}
-              </button>
-            </div>
-
-            <p className="mt-2 text-xs text-gray-500">
-              For regular users accessing the platform.
-            </p>
-          </div>
-
-          {/* Admin Code */}
-          <div>
-            <div className="mb-2 flex items-center gap-2">
-              <ShieldCheck size={16} className="text-[#00ff66]" />
-              <label className="text-sm font-medium text-gray-200">
-                Admin access code
-              </label>
-            </div>
-
-            <div className="flex items-center justify-between gap-3
-            rounded-xl border border-white/10 bg-white/[0.03] p-3
-            transition hover:border-[#00ff66]/40">
-              <span className="pl-1 font-mono text-lg font-semibold
-              tracking-[0.15em] text-white">
-                {codeAdmin}
-              </span>
-
-              <button
-                type="button"
-                onClick={() => handleCopy(codeAdmin)}
-                className="flex shrink-0 items-center gap-2 rounded-lg
-                bg-[#00ff66] px-3 py-2 text-sm font-semibold
-                text-black transition hover:bg-[#00e65c]
-                active:scale-95"
-              >
-                {copiedCode === codeAdmin ? (
-                  <>
-                    <Check size={15} />
-                    Copied
-                  </>
-                ) : (
-                  <>
-                    <Copy size={15} />
-                    Copy
-                  </>
-                )}
-              </button>
-            </div>
-
-            <p className="mt-2 text-xs text-gray-500">
-              Restricted code for administrator access.
-            </p>
-          </div>
-
-          {/* Footer Notice */}
-          <div className="flex items-start gap-2 rounded-xl border
-          border-[#00ff66]/10 bg-[#00ff66]/[0.04] p-3">
-            <ShieldCheck
-              size={17}
-              className="mt-0.5 shrink-0 text-[#00ff66]"
-            />
-            <p className="text-xs leading-relaxed text-gray-400">
-              Keep your admin code private.
-            </p>
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="border-t border-white/10 px-6 py-4">
-          <button
-            type="button"
-            onClick={onClose}
-            className="w-full rounded-xl border border-white/10
-            bg-white/[0.04] py-3 text-sm font-medium text-gray-300
-            transition hover:border-white/20 hover:bg-white/[0.08]
-            hover:text-white cursor-pointer"
-          >
-            Done
-          </button>
+          ))}
         </div>
       </div>
     </div>
