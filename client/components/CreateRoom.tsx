@@ -1,112 +1,193 @@
-import { ShieldAlert } from "lucide-react"
-import { useState } from "react"
+import { ShieldAlert, X, Minus, Plus, Timer, Users, Loader2 } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
 import GeneratedCode from "./GeneratedCode"
 
-interface Modal { onClose: () => void }
+const DURATIONS = [
+    { value: "15", label: "15 min" },
+    { value: "30", label: "30 min" },
+    { value: "60", label: "1 hour" },
+]
+const MIN_USERS = 2
+const MAX_USERS = 20
 
-const CreateRoom = ({ onClose }: Modal) => {
-    const [success, setSuccess] = useState<string>("")
-    const [error, setError] = useState<string>("")
-    const [isSubmited, setIsSubmited] = useState<Boolean>(false)
-    const [formData, setFormData] = useState({
-        roomName: "",
-        duration: "15",
-        numUsers: "2",
-        userhandle: ""
-    })
+const inputCls =
+    "w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-gray-100 " +
+    "placeholder:text-white/25 outline-none transition hover:border-white/20 " +
+    "focus:border-[#00ff66]/70 focus:bg-[#00ff66]/[0.04] focus:shadow-[0_0_0_3px_rgba(0,255,102,0.12)]"
+const labelCls = "mb-1.5 flex items-center gap-1.5 text-xs font-medium text-white/70"
+const stepCls =
+    "grid h-10 w-10 place-items-center rounded-lg border border-white/10 bg-white/[0.03] text-white/70 transition " +
+    "hover:border-[#00ff66]/50 hover:text-[#00ff66] disabled:cursor-not-allowed disabled:opacity-30 " +
+    "disabled:hover:border-white/10 disabled:hover:text-white/70"
 
-    // Handle form submission
+const CreateRoom = ({ onClose }: { onClose: () => void }) => {
+    const [form, setForm] = useState({ roomName: "", duration: "15", numUsers: 2, userhandle: "" })
+    const [status, setStatus] = useState<{ type: "error" | "success"; text: string } | null>(null)
+    const [isLoading, setIsLoading] = useState(false)
+    const [isSubmitted, setIsSubmitted] = useState(false)
+    const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose()
+        window.addEventListener("keydown", onKey)
+        return () => {
+            window.removeEventListener("keydown", onKey)
+            clearTimeout(timer.current)
+        }
+    }, [onClose])
+
+    const set = (key: string, value: string | number) => {
+        setStatus(null)
+        setForm(f => ({ ...f, [key]: value }))
+    }
+    const step = (delta: number) => set("numUsers", Math.min(MAX_USERS, Math.max(MIN_USERS, form.numUsers + delta)))
+
     const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault()
-        console.log("Form submitted with data:", formData)
-        setSuccess("Successfully")
-        setTimeout(() => {
-            setIsSubmited(true)
-        }, 3000);
-
+        if (!form.roomName.trim() || !form.userhandle.trim()) {
+            setStatus({ type: "error", text: "Add a room name and your handle to continue." })
+            timer.current = setTimeout(() => setStatus(null), 3000)
+            return
+        }
+        console.log("Form submitted with data:", form)
+        setIsLoading(true)
+        setStatus({ type: "success", text: "Room created. Generating your code..." })
+        timer.current = setTimeout(() => setIsSubmitted(true), 2000)
     }
 
-    // Handle input changes
-    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-        const { name, value } = e.target
-        setFormData(prev => ({
-            ...prev,
-            [name]: value
-        }))
-    }
+    if (isSubmitted) return <GeneratedCode onClose={onClose} />
+
+    const fill = `${(Number(form.duration) / 60) * 100}%`
 
     return (
-        <div>
-            {!isSubmited ? (
-                <div className='fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm'>
+        <div
+            className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto p-4 backdrop-blur-md
+                bg-[radial-gradient(ellipse_at_50%_0%,rgba(0,255,102,0.14),transparent_60%),rgba(2,4,3,0.85)]"
+            onMouseDown={e => e.target === e.currentTarget && onClose()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="create-room-title"
+        >
+            <style>{`
+                @keyframes cr-in { from { opacity: 0; transform: translateY(14px) scale(.97) } }
+                @media (prefers-reduced-motion: reduce) { .cr-in { animation: none !important } }
+            `}</style>
 
-                    {/* 2. Modal card container */}
-                    <div className='relative w-full max-w-md p-6 transition-all transform bg-black border border-gray-600 rounded-2xl shadow-2xl'>
-                        <div className="flex items-center justify-between mb-4">
-                            <h3 className="text-[#00ff66] text-xs">// INITIALIZE_SESSION</h3>
-                            <button className="cursor-pointer hover:text-red-600" onClick={onClose}>X</button>
-                        </div>
-                        <form action="" onSubmit={handleSubmit}>
-                            {/* Form messages */}
-                            {success && <div className="p-2 mb-4 text-xs text-green-500 bg-green-900/20 border border-green-500 rounded-md">{success}</div>}
-                            {error && <div className="p-2 mb-4 text-xs text-red-500 bg-red-900/20 border border-red-500 rounded-md">{error}</div>}
+            <div
+                className="cr-in relative w-full max-w-sm rounded-2xl border border-white/10 bg-[#080b09] p-5
+                    shadow-[0_0_90px_-25px_rgba(0,255,102,0.45),0_30px_60px_-20px_rgba(0,0,0,0.9)]"
+                style={{ animation: "cr-in .3s cubic-bezier(.2,.8,.2,1) both" }}
+            >
+                <div className="absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-[#00ff66] to-transparent" />
 
-                            {/* 1. Modal header */}
-                            <h2 className="mb-1 text-lg font-bold text-white">Create a Room</h2>
-                            <p className="mb-4 text-xs text-white/60">Fill in the details below to create a new room.</p>
-
-                            {/* Name of chat */}
-                            <label className="flex items-center gap-2 mb-1 text-xs text-white/80">
-                                Room name
-                            </label>
-                            <input type="text" name="roomName" onChange={handleChange} placeholder="Anonym099" className="w-full p-2 mb-4 text-gray-300 border outline-none border-gray-600 focus:border-[#00ff66] rounded-md" />
-
-                            <div className="flex gap-4">
-                                {/* Duration */}
-                                <div className="flex flex-col w-full">
-                                    <label className="flex items-center gap-2 mb-1 text-xs text-white/80">
-                                        Duration
-                                    </label>
-                                    <select name="duration" id="duration" onChange={handleChange} className="w-full p-2 mb-4 text-gray-300 border bg-black outline-none border-gray-600 focus:border-[#00ff66] rounded-md">
-                                        <option value="15">15 minutes</option>
-                                        <option value="30">30 minutes</option>
-                                        <option value="60">1 hour</option>
-                                    </select>
-                                </div>
-
-                                {/* Number of users */}
-                                <div className="flex flex-col w-full">
-                                    <label className="flex items-center gap-2 mb-1 text-xs text-white/80">
-                                        Number of users
-                                    </label>
-                                    <input type="number" value={formData.numUsers} name="numUsers" onChange={handleChange} placeholder="min 2" min={2} className="w-full p-2 mb-4 text-gray-300 border outline-none border-gray-600 focus:border-[#00ff66] rounded-md" />
-                                </div>
-
-                            </div>
-                            {/* Room Code which is auto-generated
-                <label className="flex items-center gap-2 mb-1 text-xs text-white/80">
-                    Room Code
-                </label>
-                <input type="text" placeholder="Room Code" className="w-full p-2 text-gray-300 border outline-none border-gray-600 focus:border-[#00ff66] rounded-md" />
-                <label className="flex ml-2 items-center gap-2 text-xs text-white/60 mb-4">This is auto-generated and will be used to join the room</label> */}
-
-                            {/* Your Handle */}
-                            <label className="flex items-center gap-2 mb-1 text-xs text-white/80">
-                                Your Handle
-                            </label>
-                            <input type="text" name="userhandle" onChange={handleChange} placeholder="user101" className="w-full p-2 mb-4 text-gray-300 border outline-none border-gray-600 focus:border-[#00ff66] rounded-md" />
-                            <button className="w-full p-2 bg-[#00ff66] text-black font-bold rounded-md hover:bg-[#00cc52] cursor-pointer">Create</button>
-                            {/* Security warning */}
-                            <div className="flex items-center gap-2 mt-4 text-xs text-white/80">
-                                <ShieldAlert className="text-yellow-500" />
-                                <span>Creating a room will generate a unique code for others to join.</span>
-                            </div>
-                        </form>
+                <div className="mb-4 flex items-start justify-between">
+                    <div>
+                        <h2 id="create-room-title" className="text-lg font-semibold tracking-tight text-white">Create a room</h2>
+                        <p className="text-sm text-white/50">Private, temporary, and gone when the timer ends.</p>
                     </div>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        aria-label="Close"
+                        className="cursor-pointer rounded-lg p-1.5 text-white/40 transition hover:bg-red-600 hover:text-white
+                            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff66]/60"
+                    >
+                        <X size={18} />
+                    </button>
                 </div>
-            ) : <GeneratedCode onClose={onClose} />}
-        </div>
 
+                <form onSubmit={handleSubmit} noValidate className="space-y-4">
+                    {status && (
+                        <div
+                            role={status.type === "error" ? "alert" : "status"}
+                            className={`rounded-lg border px-3 py-2 text-xs ${
+                                status.type === "error"
+                                    ? "border-red-500/40 bg-red-500/10 text-red-300"
+                                    : "border-[#00ff66]/30 bg-[#00ff66]/10 text-[#6dffa6]"
+                            }`}
+                        >
+                            {status.text}
+                        </div>
+                    )}
+
+                    <div>
+                        <label htmlFor="roomName" className={labelCls}>Room name</label>
+                        <input id="roomName" value={form.roomName} onChange={e => set("roomName", e.target.value)}
+                            placeholder="Anonym099" autoComplete="off" className={inputCls} />
+                    </div>
+
+                    {/* Duration + fuse */}
+                    <div>
+                        <span className={labelCls}><Timer size={13} className="text-amber-400" /> Self-destructs after</span>
+                        <div role="radiogroup" aria-label="Duration" className="grid grid-cols-3 gap-1 rounded-lg border border-white/10 bg-white/[0.03] p-1">
+                            {DURATIONS.map(d => {
+                                const active = form.duration === d.value
+                                return (
+                                    <button
+                                        key={d.value}
+                                        type="button"
+                                        role="radio"
+                                        aria-checked={active}
+                                        onClick={() => set("duration", d.value)}
+                                        className={`cursor-pointer rounded-md py-2 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff66]/60 ${
+                                            active
+                                                ? "bg-[#00ff66] font-semibold text-black shadow-[0_0_20px_-4px_rgba(0,255,102,0.8)]"
+                                                : "text-white/60 hover:bg-white/5 hover:text-white"
+                                        }`}
+                                    >
+                                        {d.label}
+                                    </button>
+                                )
+                            })}
+                        </div>
+                        <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
+                            <div
+                                className="relative h-full rounded-full bg-gradient-to-r from-[#00ff66] via-lime-300 to-amber-400 transition-[width] duration-500"
+                                style={{ width: fill }}
+                            >
+                                <span className="absolute right-0 top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-amber-300 shadow-[0_0_12px_3px_rgba(251,191,36,0.8)]" />
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Seats */}
+                    <div>
+                        <span className={labelCls}><Users size={13} className="text-[#00ff66]" /> Seats in the room</span>
+                        <div className="flex items-center gap-2">
+                            <button type="button" aria-label="Fewer users" onClick={() => step(-1)} disabled={form.numUsers <= MIN_USERS} className={stepCls}>
+                                <Minus size={16} />
+                            </button>
+                            <span aria-live="polite" className={`${inputCls} text-center font-mono text-base`}>{form.numUsers}</span>
+                            <button type="button" aria-label="More users" onClick={() => step(1)} disabled={form.numUsers >= MAX_USERS} className={stepCls}>
+                                <Plus size={16} />
+                            </button>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label htmlFor="userhandle" className={labelCls}>Your handle</label>
+                        <input id="userhandle" value={form.userhandle} onChange={e => set("userhandle", e.target.value)}
+                            placeholder="user101" autoComplete="off" className={`${inputCls} font-mono`} />
+                    </div>
+
+                    <button
+                        type="submit"
+                        disabled={isLoading}
+                        className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg bg-[#00ff66] py-3 font-semibold text-black
+                            shadow-[0_0_30px_-6px_rgba(0,255,102,0.7)] transition hover:bg-[#33ff85] active:scale-[0.99]
+                            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-black
+                            disabled:cursor-wait disabled:opacity-80"
+                    >
+                        {isLoading ? <><Loader2 size={16} className="animate-spin" /> Creating room...</> : "Create room"}
+                    </button>
+
+                    <div className="flex items-start gap-2 text-xs text-white/50">
+                        <ShieldAlert size={16} className="mt-px shrink-0 text-amber-400" />
+                        <span>Creating a room generates a unique code. Share it only with people you want inside.</span>
+                    </div>
+                </form>
+            </div>
+        </div>
     )
 }
 
