@@ -4,10 +4,12 @@ import img from "@/public/darkimage.jpg";
 import PrincipleSection from "./PrincipleSection";
 import Manifesto from "./Manifesto";
 import CreateRoom from "./CreateRoom";
+import EnterRoom from "./EnterRoom";
 import { useState } from "react";
 
 const LandingPage = () => {
   const [showCreateRoom, setShowCreateRoom] = useState<Boolean>(false)
+  const [showEnterRoom, setShowEnterRoom] = useState<Boolean>(false)
   return (
     <main className="relative min-h-screen overflow-hidden bg-black text-white">
       {/* Background image */}
@@ -63,7 +65,7 @@ const LandingPage = () => {
              CREATE A ROOM
             </button>
 
-            <button className="border border-white/10 bg-white/[0.03] px-7 py-3 font-mono text-xs cursor-pointer tracking-widest text-white/60 backdrop-blur-sm transition hover:border-white/20 hover:text-white">
+            <button className="border border-white/10 bg-white/[0.03] px-7 py-3 font-mono text-xs cursor-pointer tracking-widest text-white/60 backdrop-blur-sm transition hover:border-white/20 hover:text-white" onClick={() => setShowEnterRoom(true)}>
               ENTER A ROOM
             </button>
           </div>
@@ -83,6 +85,7 @@ const LandingPage = () => {
         <span>SECURE CHANNEL</span>
       </div>
       {showCreateRoom && ( <CreateRoom onClose={() => setShowCreateRoom(false)} />)}
+      {showEnterRoom && ( <EnterRoom onClose={() => setShowEnterRoom(false)} />)}
 
       {/* ========== principle section ========== */}
       <PrincipleSection />
