@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.core.paginator import EmptyPage, Paginator
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
@@ -18,9 +20,10 @@ from .serializers import (
 )
 from .services import (
     delete_room,
-    hash_admin_token,
-    issue_admin_token,
-    verify_admin_token,
+    find_admin_by_code,
+    hash_admin_code,
+    issue_admin_code,
+    verify_admin_code,
 )
 
 
@@ -33,11 +36,14 @@ def get_live_room(session_code):
 
 
 def get_admin(room, request):
-    token = request.headers.get("X-Admin-Token", "")
-    if not token:
+    username = request.headers.get("X-Admin-Username", "").strip()
+    code = request.headers.get("X-Admin-Code", "").strip()
+    if not username or not code:
         return None
-    admins = AppUser.objects.filter(room=room, role=AppUser.ADMIN)
-    return next((admin for admin in admins if verify_admin_token(admin, token)), None)
+    admin = AppUser.objects.filter(
+        room=room, username=username, role=AppUser.ADMIN
+    ).first()
+    return admin if verify_admin_code(admin, code) else None
 
 
 class RoomCollectionView(APIView):
@@ -45,14 +51,14 @@ class RoomCollectionView(APIView):
         serializer = CreateRoomSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         values = serializer.validated_data
-        end_time = values.get("end_time")
-        if end_time and end_time <= timezone.now():
+        end_time = values.get("end_time") or timezone.now() + timedelta(minutes=15)
+        if end_time <= timezone.now():
             return Response(
                 {"error": "end_time must be in the future."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        token = issue_admin_token()
+        admin_code = issue_admin_code(values["username"])
         with transaction.atomic():
             room = Room.objects.create(
                 group_name=values["group_name"],
@@ -63,14 +69,14 @@ class RoomCollectionView(APIView):
                 username=values["username"],
                 role=AppUser.ADMIN,
                 room=room,
-                admin_token_hash=hash_admin_token(token),
+                admin_code_hash=hash_admin_code(admin_code),
             )
 
         return Response(
             {
                 **room_details(room),
                 "username": creator.username,
-                "admin_token": token,
+                "admin_code": admin_code,
             },
             status=status.HTTP_201_CREATED,
         )
@@ -82,11 +88,16 @@ class RoomJoinView(APIView):
         serializer.is_valid(raise_exception=True)
 
         with transaction.atomic():
-            room = (
-                Room.objects.select_for_update()
-                .filter(session_code=session_code)
-                .first()
-            )
+            username = serializer.validated_data["username"]
+            admin = find_admin_by_code(username, session_code)
+            if admin:
+                room = Room.objects.select_for_update().filter(pk=admin.room_id).first()
+            else:
+                room = (
+                    Room.objects.select_for_update()
+                    .filter(session_code=session_code)
+                    .first()
+                )
             if room is None:
                 return Response(
                     {"error": "Room not found."},
@@ -99,8 +110,19 @@ class RoomJoinView(APIView):
                     status=status.HTTP_410_GONE,
                 )
 
-            username = serializer.validated_data["username"]
-            member = AppUser.objects.filter(room=room, username=username).first()
+            member = (
+                AppUser.objects.select_for_update()
+                .filter(room=room, username=username)
+                .first()
+            )
+            if member is not None and (
+                member.role != AppUser.ADMIN
+                or not verify_admin_code(member, session_code)
+            ):
+                return Response(
+                    {"error": "This username already exists in the room."},
+                    status=status.HTTP_409_CONFLICT,
+                )
             if member is not None and not member.has_connected:
                 member.joined_at = timezone.now()
                 member.save(update_fields=["joined_at"])
@@ -122,6 +144,10 @@ class RoomJoinView(APIView):
                     ).first()
                     if member is None:
                         raise
+                    return Response(
+                        {"error": "This username already exists in the room."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
 
         return Response(
             {
@@ -212,7 +238,7 @@ class RoomAdminView(APIView):
                 )
             if get_admin(room, request) is None:
                 return Response(
-                    {"error": "A valid admin token is required."},
+                    {"error": "A valid admin username and code are required."},
                     status=status.HTTP_403_FORBIDDEN,
                 )
             if "limit" in values and values["limit"] is not None:
@@ -257,7 +283,7 @@ class RoomPromoteMemberView(APIView):
                 )
             if get_admin(room, request) is None:
                 return Response(
-                    {"error": "A valid admin token is required."},
+                    {"error": "A valid admin username and code are required."},
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
@@ -270,12 +296,12 @@ class RoomPromoteMemberView(APIView):
                     status=status.HTTP_409_CONFLICT,
                 )
 
-            token = issue_admin_token()
+            admin_code = issue_admin_code(member.username)
             member.role = AppUser.ADMIN
-            member.admin_token_hash = hash_admin_token(token)
-            member.save(update_fields=["role", "admin_token_hash"])
+            member.admin_code_hash = hash_admin_code(admin_code)
+            member.save(update_fields=["role", "admin_code_hash"])
         return Response(
-            {"username": member.username, "admin_token": token},
+            {"username": member.username, "admin_code": admin_code},
             status=status.HTTP_200_OK,
         )
 
@@ -303,7 +329,7 @@ class RoomRevokeAdminView(APIView):
                 )
             if get_admin(room, request) is None:
                 return Response(
-                    {"error": "A valid admin token is required."},
+                    {"error": "A valid admin username and code are required."},
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
@@ -322,36 +348,49 @@ class RoomRevokeAdminView(APIView):
                 )
 
             member.role = AppUser.USER
-            member.admin_token_hash = None
-            member.save(update_fields=["role", "admin_token_hash"])
+            member.admin_code_hash = None
+            member.save(update_fields=["role", "admin_code_hash"])
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class RoomEndView(APIView):
     def delete(self, request, session_code):
-        room = get_live_room(session_code)
-        if room is None:
-            return Response(
-                {"error": "This room has ended."},
-                status=status.HTTP_410_GONE,
-            )
+        admin_username = request.headers.get("X-Admin-Username", "").strip()
+        admin_code = request.headers.get("X-Admin-Code", "").strip()
         with transaction.atomic():
-            room = Room.objects.select_for_update().filter(pk=room.pk).first()
+            admin = find_admin_by_code(admin_username, session_code)
+            if admin:
+                room = (
+                    Room.objects.select_for_update()
+                    .filter(pk=admin.room_id)
+                    .first()
+                )
+            else:
+                room = (
+                    Room.objects.select_for_update()
+                    .filter(
+                        session_code=session_code,
+                        members__username=admin_username,
+                        members__role=AppUser.ADMIN,
+                        members__admin_code_hash=hash_admin_code(admin_code),
+                    )
+                    .first()
+                )
             if room is None:
                 return Response(
-                    {"error": "This room has ended."},
-                    status=status.HTTP_410_GONE,
-                )
-            if room.end_time and room.end_time <= timezone.now():
-                delete_room(room)
-                return Response(
-                    {"error": "This room has ended."},
-                    status=status.HTTP_410_GONE,
+                    {"detail": "Not found."},
+                    status=status.HTTP_404_NOT_FOUND,
                 )
             if get_admin(room, request) is None:
                 return Response(
-                    {"error": "A valid admin token is required."},
+                    {"error": "A valid admin username and code are required."},
                     status=status.HTTP_403_FORBIDDEN,
                 )
-            delete_room(room)
+            if room.end_time and room.end_time <= timezone.now():
+                delete_room(room, locked=True)
+                return Response(
+                    {"error": "This room has ended."},
+                    status=status.HTTP_410_GONE,
+                )
+            delete_room(room, locked=True)
         return Response(status=status.HTTP_204_NO_CONTENT)

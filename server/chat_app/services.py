@@ -1,30 +1,86 @@
 import hashlib
 import hmac
-import secrets
 from datetime import timedelta
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.conf import settings
-from django.db import transaction
+from django.contrib.auth.hashers import check_password
+from django.db import connection, transaction
 from django.utils import timezone
 
 from user.models import AppUser
 
-from .models import ChatConnection, Room
+from .models import ChatConnection, Message, Room, generate_code
+
+ADMIN_CODE_HASH_PREFIX = "hmac_sha256$"
 
 
-def hash_admin_token(token):
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+def hash_admin_code(code):
+    digest = hmac.new(
+        settings.SECRET_KEY.encode("utf-8"), code.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    return f"{ADMIN_CODE_HASH_PREFIX}{digest}"
 
 
-def verify_admin_token(user, token):
-    return bool(
+def verify_admin_code(user, code):
+    if not (
         user
         and user.role == AppUser.ADMIN
-        and user.admin_token_hash
-        and token
-        and hmac.compare_digest(user.admin_token_hash, hash_admin_token(token))
+        and user.admin_code_hash
+        and code
+    ):
+        return False
+    code_hash = hash_admin_code(code)
+    if hmac.compare_digest(user.admin_code_hash, code_hash):
+        return True
+
+    legacy_hash = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    if hmac.compare_digest(user.admin_code_hash, legacy_hash):
+        user.admin_code_hash = code_hash
+        user.save(update_fields=["admin_code_hash"])
+        return True
+
+    if user.admin_code_hash.startswith(ADMIN_CODE_HASH_PREFIX):
+        return False
+
+    # Upgrade codes created by earlier releases to the indexed digest on use.
+    if check_password(code, user.admin_code_hash):
+        user.admin_code_hash = code_hash
+        user.save(update_fields=["admin_code_hash"])
+        return True
+    return False
+
+
+def find_admin_by_code(username, code):
+    if not username or not code:
+        return None
+    code_hash = hash_admin_code(code)
+    admin = (
+        AppUser.objects.select_related("room")
+        .filter(
+            username=username,
+            role=AppUser.ADMIN,
+            admin_code_hash=code_hash,
+        )
+        .first()
+    )
+    if admin:
+        return admin
+
+    # Existing salted hashes cannot be searched directly; retain one-time
+    # compatibility and replace the old hash when a valid code is presented.
+    admins = AppUser.objects.filter(
+        username=username,
+        role=AppUser.ADMIN,
+    ).exclude(
+        admin_code_hash__isnull=True,
+    ).exclude(
+        admin_code_hash__startswith=ADMIN_CODE_HASH_PREFIX,
+    )
+    return next(
+        (admin for admin in admins if verify_admin_code(admin, code)),
+        None,
     )
 
 
@@ -45,20 +101,73 @@ def notify_room_closed(room_id):
     )
 
 
-@transaction.atomic
-def delete_room(room):
-    locked_room = Room.objects.select_for_update().filter(pk=room.pk).first()
-    if locked_room is None:
-        return False
-    room_pk = locked_room.pk
-    locked_room.delete()
-    transaction.on_commit(lambda rid=room_pk: notify_room_closed(rid))
-    return True
+def delete_locked_room(room):
+    quote = connection.ops.quote_name
+    room_table = quote(Room._meta.db_table)
+    member_table = quote(AppUser._meta.db_table)
+    message_table = quote(Message._meta.db_table)
+    connection_table = quote(ChatConnection._meta.db_table)
+    sql = f"""
+        WITH target_members AS (
+            SELECT id FROM {member_table} WHERE room_id = %s
+        ),
+        deleted_messages AS (
+            DELETE FROM {message_table}
+            WHERE room_id = %s OR user_id IN (SELECT id FROM target_members)
+            RETURNING id
+        ),
+        deleted_connections AS (
+            DELETE FROM {connection_table}
+            WHERE room_id = %s OR user_id IN (SELECT id FROM target_members)
+            RETURNING id
+        ),
+        deleted_members AS (
+            DELETE FROM {member_table}
+            WHERE room_id = %s
+              AND (SELECT COUNT(*) FROM deleted_messages) >= 0
+              AND (SELECT COUNT(*) FROM deleted_connections) >= 0
+            RETURNING id
+        ),
+        deleted_room AS (
+            DELETE FROM {room_table}
+            WHERE id = %s
+              AND (SELECT COUNT(*) FROM deleted_members) >= 0
+            RETURNING id
+        )
+        SELECT id FROM deleted_room
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(
+            sql,
+            [room.pk, room.pk, room.pk, room.pk, room.pk],
+        )
+        deleted = cursor.fetchone() is not None
+    if deleted:
+        transaction.on_commit(lambda rid=room.pk: notify_room_closed(rid))
+    return deleted
+
+
+def delete_room(room, *, locked=False):
+    if locked:
+        return delete_locked_room(room)
+
+    with transaction.atomic():
+        locked_room = Room.objects.select_for_update().filter(pk=room.pk).first()
+        if locked_room is None:
+            return False
+        room_pk = locked_room.pk
+        locked_room.delete()
+        transaction.on_commit(lambda rid=room_pk: notify_room_closed(rid))
+        return True
 
 
 @transaction.atomic
-def register_connection(session_code, username, connection_id):
-    room = Room.objects.select_for_update().filter(session_code=session_code).first()
+def register_connection(code, username, connection_id):
+    admin = find_admin_by_code(username, code)
+    if admin:
+        room = Room.objects.select_for_update().filter(pk=admin.room_id).first()
+    else:
+        room = Room.objects.select_for_update().filter(session_code=code).first()
     if room is None:
         return None
 
@@ -68,6 +177,8 @@ def register_connection(session_code, username, connection_id):
 
     user = AppUser.objects.filter(room=room, username=username).first()
     if user is None:
+        return None
+    if user.role == AppUser.ADMIN and not verify_admin_code(user, code):
         return None
 
     if not user.has_connected:
@@ -191,5 +302,11 @@ def cleanup_stale_connections():
     return removed_connections, removed_members
 
 
-def issue_admin_token():
-    return secrets.token_urlsafe(32)
+def issue_admin_code(username):
+    while True:
+        code = generate_code()
+        if (
+            not Room.objects.filter(session_code=code).exists()
+            and find_admin_by_code(username, code) is None
+        ):
+            return code

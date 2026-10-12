@@ -20,8 +20,8 @@ class AppUser(models.Model):
         null=True,
         blank=True,
     )
-    admin_token_hash = models.CharField(
-        max_length=64, null=True, blank=True, editable=False
+    admin_code_hash = models.CharField(
+        max_length=128, null=True, blank=True, editable=False, db_index=True
     )
     joined_at = models.DateTimeField(default=timezone.now, editable=False)
     has_connected = models.BooleanField(default=False)

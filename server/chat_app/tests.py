@@ -1,5 +1,6 @@
 import json
 from datetime import timedelta
+from unittest.mock import patch
 
 from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
@@ -12,7 +13,13 @@ from rest_framework.test import APIClient
 from .consumers import MAX_FRAME_BYTES, MAX_MESSAGE_LENGTH
 from .models import ChatConnection, Message, Room
 from .routing import websocket_urlpatterns
-from .services import cleanup_expired_rooms, cleanup_stale_connections
+from .services import (
+    cleanup_expired_rooms,
+    cleanup_stale_connections,
+    find_admin_by_code,
+    hash_admin_code,
+    verify_admin_code,
+)
 from user.models import AppUser
 
 
@@ -66,6 +73,10 @@ class ChatConsumerTests(TransactionTestCase):
             self.assertEqual(first_message["message"], expected["message"])
             self.assertEqual(first_message["username"], expected["username"])
             self.assertIn("datetime", first_message)
+            self.assertRegex(
+                first_message["datetime"],
+                r"^[A-Z][a-z]{2} \d{1,2}, \d{4}, \d{2}:\d{2} [AP]M UTC$",
+            )
             self.assertEqual(
                 await second.receive_json_from(timeout=30), first_message
             )
@@ -146,6 +157,29 @@ class ChatConsumerTests(TransactionTestCase):
 
     def test_connection_requires_room_membership(self):
         async_to_sync(self.reject_non_member)()
+
+    def test_admin_websocket_requires_the_matching_admin_code(self):
+        admin_code = "AB12CD34"
+        admin = AppUser.objects.create(
+            username="room-admin",
+            room=self.room,
+            role=AppUser.ADMIN,
+            admin_code_hash=hash_admin_code(admin_code),
+        )
+        async_to_sync(self.connect_admin_with_code)(admin.username, admin_code)
+
+    async def connect_admin_with_code(self, username, admin_code):
+        base_path = f"/ws/chat/{self.room.session_code}/?username={username}"
+        rejected = self.make_communicator(base_path)
+        connected, _ = await rejected.connect(timeout=30)
+        self.assertFalse(connected)
+
+        accepted = self.make_communicator(
+            f"/ws/chat/{admin_code}/?username={username}"
+        )
+        connected, result = await accepted.connect(timeout=30)
+        self.assertTrue(connected, msg=str(result))
+        await accepted.disconnect()
 
     async def reject_non_member(self):
         for session_code, username in (
@@ -230,11 +264,27 @@ class RoomApiTests(TestCase):
         return response.data
 
     def test_room_creation_defaults_to_creator_only_and_username_is_room_scoped(self):
+        started_at = timezone.now()
         first = self.create_room()
         second = self.create_room()
 
         self.assertEqual(first["limit"], 1)
         self.assertNotEqual(first["room_code"], second["room_code"])
+        for room_data in (first, second):
+            remaining = room_data["end_time"] - started_at
+            self.assertGreaterEqual(
+                remaining, timedelta(minutes=15) - timedelta(seconds=2)
+            )
+            self.assertLessEqual(
+                remaining, timedelta(minutes=15) + timedelta(seconds=2)
+            )
+        self.assertRegex(first["admin_code"], r"^[A-Z0-9]{8}$")
+        self.assertRegex(second["admin_code"], r"^[A-Z0-9]{8}$")
+        admin = AppUser.objects.get(
+            room__session_code=first["room_code"], username="creator"
+        )
+        self.assertEqual(admin.admin_code_hash, hash_admin_code(first["admin_code"]))
+        self.assertTrue(admin.admin_code_hash.startswith("hmac_sha256$"))
         self.assertEqual(
             AppUser.objects.filter(username="creator").count(),
             2,
@@ -248,10 +298,44 @@ class RoomApiTests(TestCase):
             409,
         )
 
+    def test_room_creation_preserves_explicit_end_time_and_defaults_null(self):
+        chosen_end_time = timezone.now() + timedelta(hours=1)
+        chosen = self.create_room(
+            username="chosen-time",
+            end_time=chosen_end_time.isoformat(),
+        )
+        self.assertLess(
+            abs((chosen["end_time"] - chosen_end_time).total_seconds()),
+            1,
+        )
+
+        started_at = timezone.now()
+        defaulted = self.create_room(username="null-time", end_time=None)
+        remaining = defaulted["end_time"] - started_at
+        self.assertGreaterEqual(
+            remaining, timedelta(minutes=15) - timedelta(seconds=2)
+        )
+        self.assertLessEqual(
+            remaining, timedelta(minutes=15) + timedelta(seconds=2)
+        )
+
     def test_admin_can_raise_limit_promote_and_revoke_member(self):
         room = self.create_room()
         code = room["room_code"]
-        admin_headers = {"HTTP_X_ADMIN_TOKEN": room["admin_token"]}
+        admin_headers = {
+            "HTTP_X_ADMIN_USERNAME": "creator",
+            "HTTP_X_ADMIN_CODE": room["admin_code"],
+        }
+        self.assertEqual(
+            self.client.patch(
+                f"/api/rooms/{code}/admin/",
+                {"limit": 2},
+                format="json",
+                HTTP_X_ADMIN_USERNAME="someone-else",
+                HTTP_X_ADMIN_CODE=room["admin_code"],
+            ).status_code,
+            403,
+        )
 
         self.assertEqual(
             self.client.patch(
@@ -262,31 +346,130 @@ class RoomApiTests(TestCase):
             ).status_code,
             200,
         )
-        self.assertEqual(
-            self.client.post(
-                f"/api/rooms/{code}/join/",
-                {"username": "guest"},
-                format="json",
-            ).status_code,
-            200,
+        regular_join = self.client.post(
+            f"/api/rooms/{code}/join/",
+            {"username": "guest"},
+            format="json",
         )
+        self.assertEqual(regular_join.status_code, 200, regular_join.data)
+        self.assertEqual(regular_join.data["role"], AppUser.USER)
 
         promoted = self.client.post(
             f"/api/rooms/{code}/admin/members/guest/promote/",
             **admin_headers,
         )
         self.assertEqual(promoted.status_code, 200, promoted.data)
-        self.assertNotEqual(promoted.data["admin_token"], room["admin_token"])
+        self.assertRegex(promoted.data["admin_code"], r"^[A-Z0-9]{8}$")
+        promoted_member = AppUser.objects.get(
+            room__session_code=code, username="guest"
+        )
+        self.assertEqual(
+            promoted_member.admin_code_hash,
+            hash_admin_code(promoted.data["admin_code"]),
+        )
         self.assertEqual(
             self.client.post(
                 f"/api/rooms/{code}/admin/members/creator/revoke/",
-                HTTP_X_ADMIN_TOKEN=promoted.data["admin_token"],
+                HTTP_X_ADMIN_USERNAME="guest",
+                HTTP_X_ADMIN_CODE=promoted.data["admin_code"],
             ).status_code,
             204,
         )
         self.assertIsNone(
-            AppUser.objects.get(room__session_code=code, username="creator").admin_token_hash
+            AppUser.objects.get(
+                room__session_code=code, username="creator"
+            ).admin_code_hash
         )
+
+    def test_admin_username_requires_its_code_when_joining(self):
+        room = self.create_room()
+        room_join_url = f"/api/rooms/{room['room_code']}/join/"
+
+        self.assertEqual(
+            self.client.post(
+                room_join_url, {"username": "creator"}, format="json"
+            ).status_code,
+            409,
+        )
+        response = self.client.post(
+            f"/api/rooms/{room['admin_code']}/join/",
+            {"username": "creator"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["role"], AppUser.ADMIN)
+        self.assertEqual(response.data["room_code"], room["room_code"])
+        self.assertEqual(
+            self.client.post(
+                f"/api/rooms/{room['admin_code']}/join/",
+                {"username": "someone-else"},
+                format="json",
+            ).status_code,
+            404,
+        )
+
+    @patch(
+        "chat_app.services.check_password",
+        side_effect=AssertionError("New admin-code lookups must not run PBKDF2."),
+    )
+    def test_admin_code_lookup_uses_indexed_digest_without_slow_password_hash(
+        self, _
+    ):
+        room_data = self.create_room()
+        owner = AppUser.objects.get(
+            room__session_code=room_data["room_code"], username="creator"
+        )
+
+        self.assertTrue(verify_admin_code(owner, room_data["admin_code"]))
+        self.assertFalse(verify_admin_code(owner, "WRONG123"))
+        self.assertEqual(
+            find_admin_by_code("creator", room_data["admin_code"]).pk,
+            owner.pk,
+        )
+        self.assertIsNone(find_admin_by_code("creator", "WRONG123"))
+
+    def test_existing_regular_username_is_rejected_instead_of_reclaimed(self):
+        room = self.create_room(limit=2)
+        join_url = f"/api/rooms/{room['room_code']}/join/"
+
+        self.assertEqual(
+            self.client.post(
+                join_url,
+                {"username": "guest"},
+                format="json",
+            ).status_code,
+            200,
+        )
+        duplicate = self.client.post(
+            join_url, {"username": "guest"}, format="json"
+        )
+        self.assertEqual(duplicate.status_code, 409)
+        self.assertEqual(
+            duplicate.data["error"],
+            "This username already exists in the room.",
+        )
+
+    def test_promoted_member_logs_in_with_personal_admin_code(self):
+        room = self.create_room(limit=2)
+        self.client.post(
+            f"/api/rooms/{room['room_code']}/join/",
+            {"username": "selected"},
+            format="json",
+        )
+        promoted = self.client.post(
+            f"/api/rooms/{room['room_code']}/admin/members/selected/promote/",
+            HTTP_X_ADMIN_USERNAME="creator",
+            HTTP_X_ADMIN_CODE=room["admin_code"],
+        )
+        self.assertEqual(promoted.status_code, 200, promoted.data)
+        admin_login = self.client.post(
+            f"/api/rooms/{promoted.data['admin_code']}/join/",
+            {"username": "selected"},
+            format="json",
+        )
+        self.assertEqual(admin_login.status_code, 200, admin_login.data)
+        self.assertEqual(admin_login.data["role"], AppUser.ADMIN)
+        self.assertEqual(admin_login.data["room_code"], room["room_code"])
 
     def test_message_history_requires_room_membership(self):
         room_data = self.create_room()
@@ -299,6 +482,10 @@ class RoomApiTests(TestCase):
         )
         self.assertEqual(member_response.status_code, 200)
         self.assertEqual(member_response.data["results"][0]["content"], "secret")
+        self.assertRegex(
+            member_response.data["results"][0]["datetime"],
+            r"^[A-Z][a-z]{2} \d{1,2}, \d{4}, \d{2}:\d{2} [AP]M UTC$",
+        )
         self.assertEqual(
             self.client.get(
                 f"/api/rooms/{room.session_code}/messages/?username=outsider"
@@ -311,15 +498,29 @@ class RoomApiTests(TestCase):
         room = Room.objects.get(session_code=room_data["room_code"])
         creator = AppUser.objects.get(room=room, username="creator")
         Message.objects.create(room=room, user=creator, content="temporary")
+        ChatConnection.objects.create(room=room, user=creator)
 
         response = self.client.delete(
             f"/api/rooms/{room.session_code}/admin/end/",
-            HTTP_X_ADMIN_TOKEN=room_data["admin_token"],
+            HTTP_X_ADMIN_USERNAME="creator",
+            HTTP_X_ADMIN_CODE=room_data["admin_code"],
         )
         self.assertEqual(response.status_code, 204)
         self.assertFalse(Room.objects.filter(pk=room.pk).exists())
         self.assertFalse(AppUser.objects.filter(pk=creator.pk).exists())
         self.assertFalse(Message.objects.filter(room_id=room.pk).exists())
+        self.assertFalse(ChatConnection.objects.filter(room_id=room.pk).exists())
+
+    def test_admin_end_accepts_personal_admin_code_in_url(self):
+        room_data = self.create_room()
+        room = Room.objects.get(session_code=room_data["room_code"])
+        response = self.client.delete(
+            f"/api/rooms/{room_data['admin_code']}/admin/end/",
+            HTTP_X_ADMIN_USERNAME="creator",
+            HTTP_X_ADMIN_CODE=room_data["admin_code"],
+        )
+        self.assertEqual(response.status_code, 204, response.data)
+        self.assertFalse(Room.objects.filter(pk=room.pk).exists())
 
     def test_expiry_and_stale_connection_cleanup_delete_room_records(self):
         room_data = self.create_room()

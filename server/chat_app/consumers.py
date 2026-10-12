@@ -18,6 +18,7 @@ from .services import (
     remove_connection,
     touch_connection,
 )
+from .serializers import format_message_datetime
 
 HEARTBEAT_INTERVAL_SECONDS = 30
 MAX_MESSAGE_LENGTH = 4000
@@ -31,12 +32,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if not username:
             await self.close(code=4003)
             return
+        code = self.scope["url_route"]["kwargs"]["session_code"]
 
         self.connection_id = uuid.uuid4()
         registered = await self.register(
-            self.scope["url_route"]["kwargs"]["session_code"],
-            username,
-            self.connection_id,
+            code, username, self.connection_id
         )
         if registered is None:
             await self.close(code=4003)
@@ -129,8 +129,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self.close(code=4001)
 
     @database_sync_to_async
-    def register(self, session_code, username, connection_id):
-        return register_connection(session_code, username, connection_id)
+    def register(self, code, username, connection_id):
+        return register_connection(code, username, connection_id)
 
     @database_sync_to_async
     def unregister(self, connection_id):
@@ -173,6 +173,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 "id": message.pk,
                 "message": message.content,
                 "username": self.username,
-                "datetime": message.datetime.isoformat(),
+                "datetime": format_message_datetime(message.datetime),
             }
         }
