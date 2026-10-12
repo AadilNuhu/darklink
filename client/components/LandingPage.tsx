@@ -59,11 +59,11 @@ const LandingPage = () => {
 
           {/* CTA area */}
           <div className="mt-10 flex flex-col gap-3 sm:flex-row">
-            <button className="group relative overflow-hidden border border-[#00ff66]/60 bg-[#00ff66] px-7 py-3 font-mono text-xs font-bold tracking-widest text-black transition-all duration-300 hover:bg-[#00ff66]/90 hover:shadow-[0_0_30px_rgba(0,255,102,0.2)]" onClick={() => setShowCreateRoom(true)} >
+            <button className="group relative overflow-hidden border border-[#00ff66]/60 bg-[#00ff66] cursor-pointer px-7 py-3 font-mono text-xs font-bold tracking-widest text-black transition-all duration-300 hover:bg-[#00ff66]/90 hover:shadow-[0_0_30px_rgba(0,255,102,0.2)]" onClick={() => setShowCreateRoom(true)} >
              CREATE A ROOM
             </button>
 
-            <button className="border border-white/10 bg-white/[0.03] px-7 py-3 font-mono text-xs tracking-widest text-white/60 backdrop-blur-sm transition hover:border-white/20 hover:text-white">
+            <button className="border border-white/10 bg-white/[0.03] px-7 py-3 font-mono text-xs cursor-pointer tracking-widest text-white/60 backdrop-blur-sm transition hover:border-white/20 hover:text-white">
               ENTER A ROOM
             </button>
           </div>
