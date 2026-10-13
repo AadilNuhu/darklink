@@ -28,17 +28,21 @@ All endpoints start with `/api/rooms/`. Send and receive JSON unless noted.
   "group_name": "Study group",
   "username": "host",
   "limit": 8,
-  "end_time": "2026-10-12T18:00:00Z"
+  "duration_minutes": 30
 }
 ```
 
-`username` and `group_name` are required. `limit` is optional (default `1`,
-including the host; use `null` for no limit). `end_time` is optional; if left
-out or set to `null`, the room expires 15 minutes after creation.
+`username` and `group_name` are required. `limit` is optional (default `2`,
+including the host, so one guest can join; use `null` for no limit).
+`duration_minutes` is optional (default `15`, minimum `1`, maximum `120`). The
+countdown begins once the admin and at least one non-admin have joined. The
+admin can join before or after the first guest.
 
 The `201` response includes `room_code`, `username`, `admin_code`, `limit`,
-`start_time`, and `end_time`. Save the admin code when creating the room; it
-cannot be retrieved later.
+`duration_minutes`, `start_time`, and `end_time`. Until both an admin and a
+non-admin have joined, `start_time` and `end_time` are `null`. The join
+response that starts the countdown includes the actual start and end times.
+Save the admin code when creating the room; it cannot be retrieved later.
 
 ### Join a room
 
@@ -51,10 +55,12 @@ admin. The request body is:
 {"username": "guest"}
 ```
 
-A successful `200` response includes `room_code`, `username`, and `role`
-(`"U"` for regular user, `"A"` for admin). When joining with an admin code,
-`code` is the admin code in the URL and `username` must be its owner. Using an
-admin code with a different username does not reveal the room.
+A successful `200` response includes `room_code`, `username`, `role`
+(`"U"` for regular user, `"A"` for admin), `start_time`, and `end_time`.
+The timer starts once both an admin and a regular user have joined; either can
+join first. When joining with an admin code, `code` is the admin code in the
+URL and `username` must be its owner. Using an admin code with a different
+username does not reveal the room.
 
 ### Read chat history
 
@@ -85,8 +91,9 @@ that code private. A room must always have at least one admin.
 
 For **End and delete the room**, use the room code in the URL as shown above.
 The admin code also works in place of `{room_code}`. In either case, send both
-admin headers. Success returns `204 No Content`; the room, members, messages,
-and connections are deleted.
+admin headers. Success returns `200 OK` with
+`{"message": "Room ended successfully."}`; the room, members, messages, and
+connections are deleted.
 
 ## WebSocket chat
 

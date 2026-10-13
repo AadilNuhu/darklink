@@ -18,9 +18,11 @@ class CreateRoomSerializer(serializers.Serializer):
     group_name = serializers.CharField(max_length=255)
     username = serializers.CharField(max_length=25)
     limit = serializers.IntegerField(
-        min_value=1, max_value=20, required=False, allow_null=True, default=1
+        min_value=1, max_value=20, required=False, allow_null=True, default=2
     )
-    end_time = serializers.DateTimeField(required=False, allow_null=True)
+    duration_minutes = serializers.IntegerField(
+        min_value=1, max_value=120, required=False, default=15
+    )
 
 
 class JoinRoomSerializer(serializers.Serializer):
@@ -59,6 +61,7 @@ def room_details(room):
         "room_code": room.session_code,
         "group_name": room.group_name,
         "limit": room.limit,
+        "duration_minutes": room.duration_minutes,
         "start_time": room.start_time,
         "end_time": room.end_time,
     }

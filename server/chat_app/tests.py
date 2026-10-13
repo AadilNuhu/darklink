@@ -263,21 +263,16 @@ class RoomApiTests(TestCase):
         self.assertEqual(response.status_code, 201, response.data)
         return response.data
 
-    def test_room_creation_defaults_to_creator_only_and_username_is_room_scoped(self):
-        started_at = timezone.now()
+    def test_room_creation_allows_one_guest_and_usernames_are_room_scoped(self):
         first = self.create_room()
         second = self.create_room()
 
-        self.assertEqual(first["limit"], 1)
+        self.assertEqual(first["limit"], 2)
         self.assertNotEqual(first["room_code"], second["room_code"])
         for room_data in (first, second):
-            remaining = room_data["end_time"] - started_at
-            self.assertGreaterEqual(
-                remaining, timedelta(minutes=15) - timedelta(seconds=2)
-            )
-            self.assertLessEqual(
-                remaining, timedelta(minutes=15) + timedelta(seconds=2)
-            )
+            self.assertEqual(room_data["duration_minutes"], 15)
+            self.assertIsNone(room_data["start_time"])
+            self.assertIsNone(room_data["end_time"])
         self.assertRegex(first["admin_code"], r"^[A-Z0-9]{8}$")
         self.assertRegex(second["admin_code"], r"^[A-Z0-9]{8}$")
         admin = AppUser.objects.get(
@@ -289,34 +284,108 @@ class RoomApiTests(TestCase):
             AppUser.objects.filter(username="creator").count(),
             2,
         )
-        self.assertEqual(
-            self.client.post(
-                f"/api/rooms/{first['room_code']}/join/",
-                {"username": "guest"},
-                format="json",
-            ).status_code,
-            409,
+        guest_join = self.client.post(
+            f"/api/rooms/{first['room_code']}/join/",
+            {"username": "guest"},
+            format="json",
         )
+        self.assertEqual(guest_join.status_code, 200, guest_join.data)
+        self.assertIsNone(guest_join.data["start_time"])
+        self.assertIsNone(guest_join.data["end_time"])
 
-    def test_room_creation_preserves_explicit_end_time_and_defaults_null(self):
-        chosen_end_time = timezone.now() + timedelta(hours=1)
-        chosen = self.create_room(
-            username="chosen-time",
-            end_time=chosen_end_time.isoformat(),
+    def test_room_creation_accepts_custom_duration_up_to_two_hours(self):
+        for duration in (2, 30, 120):
+            with self.subTest(duration=duration):
+                room = self.create_room(
+                    username=f"duration-{duration}",
+                    duration_minutes=duration,
+                )
+                self.assertEqual(room["duration_minutes"], duration)
+                self.assertIsNone(room["start_time"])
+                self.assertIsNone(room["end_time"])
+
+    def test_room_creation_rejects_duration_outside_one_to_120_minutes(self):
+        for duration in (0, 121):
+            with self.subTest(duration=duration):
+                response = self.client.post(
+                    "/api/rooms/",
+                    {
+                        "group_name": "Invalid duration",
+                        "username": f"invalid-{duration}",
+                        "duration_minutes": duration,
+                    },
+                    format="json",
+                )
+                self.assertEqual(response.status_code, 400)
+
+    def test_selected_duration_starts_after_admin_and_non_admin_join(self):
+        room_data = self.create_room(
+            username="timer-host", limit=2, duration_minutes=2
         )
+        self.assertIsNone(room_data["start_time"])
+        self.assertIsNone(room_data["end_time"])
+
+        admin_join = self.client.post(
+            f"/api/rooms/{room_data['admin_code']}/join/",
+            {"username": "timer-host"},
+            format="json",
+        )
+        self.assertEqual(admin_join.status_code, 200, admin_join.data)
+        self.assertIsNone(admin_join.data["start_time"])
+        self.assertIsNone(admin_join.data["end_time"])
+
+        join_started_at = timezone.now()
+        response = self.client.post(
+            f"/api/rooms/{room_data['room_code']}/join/",
+            {"username": "first-guest"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertIsNotNone(response.data["start_time"])
+        self.assertIsNotNone(response.data["end_time"])
+        self.assertEqual(response.data["role"], AppUser.USER)
+
+        room = Room.objects.get(session_code=room_data["room_code"])
+        self.assertGreaterEqual(
+            room.start_time, join_started_at - timedelta(seconds=1)
+        )
+        self.assertLessEqual(room.start_time, timezone.now())
         self.assertLess(
-            abs((chosen["end_time"] - chosen_end_time).total_seconds()),
+            abs(
+                (room.end_time - room.start_time - timedelta(minutes=2))
+                .total_seconds()
+            ),
             1,
         )
 
-        started_at = timezone.now()
-        defaulted = self.create_room(username="null-time", end_time=None)
-        remaining = defaulted["end_time"] - started_at
-        self.assertGreaterEqual(
-            remaining, timedelta(minutes=15) - timedelta(seconds=2)
+    def test_default_fifteen_minute_timer_starts_when_admin_joins_after_guest(self):
+        room_data = self.create_room(username="late-host", limit=2)
+        guest_join = self.client.post(
+            f"/api/rooms/{room_data['room_code']}/join/",
+            {"username": "early-guest"},
+            format="json",
         )
-        self.assertLessEqual(
-            remaining, timedelta(minutes=15) + timedelta(seconds=2)
+        self.assertEqual(guest_join.status_code, 200, guest_join.data)
+        self.assertIsNone(guest_join.data["start_time"])
+        self.assertIsNone(guest_join.data["end_time"])
+
+        admin_join = self.client.post(
+            f"/api/rooms/{room_data['admin_code']}/join/",
+            {"username": "late-host"},
+            format="json",
+        )
+        self.assertEqual(admin_join.status_code, 200, admin_join.data)
+        self.assertIsNotNone(admin_join.data["start_time"])
+        self.assertIsNotNone(admin_join.data["end_time"])
+        self.assertLess(
+            abs(
+                (
+                    admin_join.data["end_time"]
+                    - admin_join.data["start_time"]
+                    - timedelta(minutes=15)
+                ).total_seconds()
+            ),
+            1,
         )
 
     def test_admin_can_raise_limit_promote_and_revoke_member(self):
@@ -398,6 +467,8 @@ class RoomApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(response.data["role"], AppUser.ADMIN)
+        self.assertIsNone(response.data["start_time"])
+        self.assertIsNone(response.data["end_time"])
         self.assertEqual(response.data["room_code"], room["room_code"])
         self.assertEqual(
             self.client.post(
@@ -505,7 +576,8 @@ class RoomApiTests(TestCase):
             HTTP_X_ADMIN_USERNAME="creator",
             HTTP_X_ADMIN_CODE=room_data["admin_code"],
         )
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, {"message": "Room ended successfully."})
         self.assertFalse(Room.objects.filter(pk=room.pk).exists())
         self.assertFalse(AppUser.objects.filter(pk=creator.pk).exists())
         self.assertFalse(Message.objects.filter(room_id=room.pk).exists())
@@ -519,7 +591,8 @@ class RoomApiTests(TestCase):
             HTTP_X_ADMIN_USERNAME="creator",
             HTTP_X_ADMIN_CODE=room_data["admin_code"],
         )
-        self.assertEqual(response.status_code, 204, response.data)
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data, {"message": "Room ended successfully."})
         self.assertFalse(Room.objects.filter(pk=room.pk).exists())
 
     def test_expiry_and_stale_connection_cleanup_delete_room_records(self):

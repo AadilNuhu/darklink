@@ -2,12 +2,9 @@
 
 import secrets
 import uuid
-from datetime import timedelta
 
-from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
-from django.utils import timezone
 
 ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
 
@@ -38,41 +35,19 @@ class Room(models.Model):
         max_length=8, unique=True, blank=True, editable=False
     )
 
-    scheduled_start_time = models.DateTimeField(null=True, blank=True)
-    scheduled_end_time = models.DateTimeField(null=True, blank=True)
-
     start_time = models.DateTimeField(null=True, blank=True, editable=False)
     end_time = models.DateTimeField(null=True, blank=True, editable=False)
+    duration_minutes = models.IntegerField(
+        default=15,
+        validators=[MinValueValidator(1), MaxValueValidator(120)],
+    )
 
     limit = models.IntegerField(
         null=True,
         blank=True,
-        default=1,
+        default=2,
         validators=[MinValueValidator(1), MaxValueValidator(20)],
     )
-
-    def clean(self):
-        super().clean()
-
-        if self.scheduled_start_time and not self.start_time:
-            earliest_start = timezone.now() + timedelta(minutes=1)
-            if self.scheduled_start_time < earliest_start:
-                raise ValidationError({
-                    "scheduled_start_time":
-                        "The start time must be at least 1 minute from now."
-                })
-
-        if self.scheduled_end_time:
-            if not self.scheduled_start_time:
-                raise ValidationError({
-                    "scheduled_end_time":
-                        "Set a scheduled start time before the end time."
-                })
-            if self.scheduled_end_time <= self.scheduled_start_time:
-                raise ValidationError({
-                    "scheduled_end_time":
-                        "The end time must be later than the scheduled start."
-                })
 
     def save(self, *args, **kwargs):
         if not self.session_code:
