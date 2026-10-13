@@ -350,7 +350,7 @@ class RoomRevokeAdminView(APIView):
             member.role = AppUser.USER
             member.admin_code_hash = None
             member.save(update_fields=["role", "admin_code_hash"])
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response({"message": "Admin privileges revoked successfully."}, status=status.HTTP_200_OK)
 
 
 class RoomEndView(APIView):
@@ -393,4 +393,4 @@ class RoomEndView(APIView):
                     status=status.HTTP_410_GONE,
                 )
             delete_room(room, locked=True)
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response({"message": "Room ended successfully."}, status=status.HTTP_204_NO_CONTENT)
