@@ -9,8 +9,11 @@ djangorestframework = "*"
 channels = "*"
 daphne = "*"
 channels-redis = "*"
+django-cors-headers = "*"
+dj-database-url = "*"
+psycopg = {extras = ["binary"], version = "*"}
 
 [dev-packages]
 
 [requires]
-python_version = "3.14"
+python_version = "3.15"

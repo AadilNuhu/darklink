@@ -1,6 +1,7 @@
 import { ShieldAlert, X, Minus, Plus, Timer, Users, Loader2 } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import GeneratedCode from "./GeneratedCode"
+import axios from "axios"
 
 const DURATIONS = [
     { value: "15", label: "15 min" },
@@ -25,6 +26,7 @@ const CreateRoom = ({ onClose }: { onClose: () => void }) => {
     const [status, setStatus] = useState<{ type: "error" | "success"; text: string } | null>(null)
     const [isLoading, setIsLoading] = useState(false)
     const [isSubmitted, setIsSubmitted] = useState(false)
+    const [codes, setCodes] = useState<{ room_code: string; admin_code: string; username: string } | null>(null)
     const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
     useEffect(() => {
@@ -42,20 +44,37 @@ const CreateRoom = ({ onClose }: { onClose: () => void }) => {
     }
     const step = (delta: number) => set("numUsers", Math.min(MAX_USERS, Math.max(MIN_USERS, form.numUsers + delta)))
 
-    const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-        e.preventDefault()
-        if (!form.roomName.trim() || !form.userhandle.trim()) {
-            setStatus({ type: "error", text: "Add a room name and your handle to continue." })
-            timer.current = setTimeout(() => setStatus(null), 3000)
-            return
-        }
-        console.log("Form submitted with data:", form)
-        setIsLoading(true)
-        setStatus({ type: "success", text: "Room created. Generating your code..." })
-        timer.current = setTimeout(() => setIsSubmitted(true), 2000)
+    const getErrorMessage = (error: any) => {
+        const data = error?.response?.data
+        if (!data) return error?.message || "Failed to create room."
+        if (typeof data === "string") return data
+        if (data.error || data.detail || data.message) return data.error || data.detail || data.message
+        const first = Object.values(data)[0]
+        return Array.isArray(first) ? first[0] : String(first)
     }
 
-    if (isSubmitted) return <GeneratedCode onClose={onClose} />
+    const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+        e.preventDefault()
+        setIsLoading(true)
+        setStatus(null)
+        try {
+            const res = await axios.post(`http://127.0.0.1:8000/api/rooms/`, {
+                group_name: form.roomName.trim(),
+                username: form.userhandle.trim(),
+                limit: form.numUsers,
+                duration_minutes: Number(form.duration),
+            })
+            setCodes(res.data)
+            setIsLoading(false)
+            setStatus({ type: "success", text: "Room created. Generating your code..." })
+            timer.current = setTimeout(() => setIsSubmitted(true), 2000)
+        } catch (error: any) {
+            setIsLoading(false)
+            setStatus({ type: "error", text: getErrorMessage(error) })
+        }
+    }
+
+    if (isSubmitted && codes) return <GeneratedCode onClose={onClose} roomCode={codes.room_code} adminCode={codes.admin_code} hostUsername={codes.username} />
 
     const fill = `${(Number(form.duration) / 60) * 100}%`
 
@@ -68,18 +87,11 @@ const CreateRoom = ({ onClose }: { onClose: () => void }) => {
             aria-modal="true"
             aria-labelledby="create-room-title"
         >
-            <style>{`
-                @keyframes cr-in { from { opacity: 0; transform: translateY(14px) scale(.97) } }
-                @media (prefers-reduced-motion: reduce) { .cr-in { animation: none !important } }
-            `}</style>
-
             <div
                 className="cr-in relative w-full max-w-sm rounded-2xl border border-white/10 bg-[#080b09] p-5
                     shadow-[0_0_90px_-25px_rgba(0,255,102,0.45),0_30px_60px_-20px_rgba(0,0,0,0.9)]"
                 style={{ animation: "cr-in .3s cubic-bezier(.2,.8,.2,1) both" }}
             >
-                <div className="absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-[#00ff66] to-transparent" />
-
                 <div className="mb-4 flex items-start justify-between">
                     <div>
                         <h2 id="create-room-title" className="text-lg font-semibold tracking-tight text-white">Create a room</h2>
@@ -100,11 +112,10 @@ const CreateRoom = ({ onClose }: { onClose: () => void }) => {
                     {status && (
                         <div
                             role={status.type === "error" ? "alert" : "status"}
-                            className={`rounded-lg border px-3 py-2 text-xs ${
-                                status.type === "error"
+                            className={`rounded-lg border px-3 py-2 text-xs ${status.type === "error"
                                     ? "border-red-500/40 bg-red-500/10 text-red-300"
                                     : "border-[#00ff66]/30 bg-[#00ff66]/10 text-[#6dffa6]"
-                            }`}
+                                }`}
                         >
                             {status.text}
                         </div>
@@ -129,11 +140,10 @@ const CreateRoom = ({ onClose }: { onClose: () => void }) => {
                                         role="radio"
                                         aria-checked={active}
                                         onClick={() => set("duration", d.value)}
-                                        className={`cursor-pointer rounded-md py-2 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff66]/60 ${
-                                            active
+                                        className={`cursor-pointer rounded-md py-2 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff66]/60 ${active
                                                 ? "bg-[#00ff66] font-semibold text-black shadow-[0_0_20px_-4px_rgba(0,255,102,0.8)]"
                                                 : "text-white/60 hover:bg-white/5 hover:text-white"
-                                        }`}
+                                            }`}
                                     >
                                         {d.label}
                                     </button>

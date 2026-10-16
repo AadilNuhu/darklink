@@ -100,6 +100,16 @@ def notify_room_closed(room_id):
         {"type": "room_closed"},
     )
 
+def notify_timer_started(room_id, start_time, end_time):
+    async_to_sync(get_channel_layer().group_send)(
+        channel_group_name(room_id),
+        {
+            "type": "timer_started",
+            "start_time": start_time.isoformat() if start_time else None,
+            "end_time": end_time.isoformat() if end_time else None,
+        },
+    )
+
 
 def delete_locked_room(room):
     quote = connection.ops.quote_name
@@ -178,6 +188,11 @@ def mark_member_joined(room, user):
         room.start_time = timezone.now()
         room.end_time = room.start_time + timedelta(minutes=room.duration_minutes)
         room.save(update_fields=["start_time", "end_time"])
+        transaction.on_commit(
+            lambda rid=room.pk, st=room.start_time, et=room.end_time: notify_timer_started(
+                rid, st, et
+            )
+        )
 
 
 @transaction.atomic

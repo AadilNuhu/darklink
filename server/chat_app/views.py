@@ -8,7 +8,7 @@ from rest_framework.views import APIView
 
 from user.models import AppUser
 
-from .models import Message, Room
+from .models import ChatConnection, Message, Room
 from .serializers import (
     CreateRoomSerializer,
     JoinRoomSerializer,
@@ -108,14 +108,26 @@ class RoomJoinView(APIView):
                 .filter(room=room, username=username)
                 .first()
             )
-            if member is not None and (
-                member.role != AppUser.ADMIN
-                or not verify_admin_code(member, session_code)
-            ):
-                return Response(
-                    {"error": "This username already exists in the room."},
-                    status=status.HTTP_409_CONFLICT,
-                )
+            if member is not None:
+                if member.role == AppUser.ADMIN:
+                    if not verify_admin_code(member, session_code):
+                        return Response(
+                            {"error": "This username already exists in the room."},
+                            status=status.HTTP_409_CONFLICT,
+                        )
+                else:
+                    # A user who has never connected still occupies the name.
+                    # Someone who left (connected before) may reconnect with it.
+                    if not member.has_connected:
+                        return Response(
+                            {"error": "This username already exists in the room."},
+                            status=status.HTTP_409_CONFLICT,
+                        )
+                    if ChatConnection.objects.filter(user=member).exists():
+                        return Response(
+                            {"error": "This username is still connected to the room."},
+                            status=status.HTTP_409_CONFLICT,
+                        )
             if member is not None and not member.has_connected:
                 member.joined_at = timezone.now()
                 member.save(update_fields=["joined_at"])
@@ -149,6 +161,7 @@ class RoomJoinView(APIView):
                 "room_code": room.session_code,
                 "username": member.username,
                 "role": member.role,
+                "duration_minutes": room.duration_minutes,
                 "start_time": room.start_time,
                 "end_time": room.end_time,
             },
@@ -347,7 +360,7 @@ class RoomRevokeAdminView(APIView):
             member.role = AppUser.USER
             member.admin_code_hash = None
             member.save(update_fields=["role", "admin_code_hash"])
-        return Response({"message": "Admin privileges revoked successfully."}, status=status.HTTP_200_OK)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class RoomEndView(APIView):

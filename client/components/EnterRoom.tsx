@@ -1,7 +1,9 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
+import { useRouter } from "next/navigation"
 import { Loader2, X } from "lucide-react"
+import axios from "axios"
 
 type Modal = { onClose: () => void }
 
@@ -15,6 +17,7 @@ const inputCls =
 const labelCls = "mb-1.5 block text-xs font-medium text-white/70"
 
 const EnterRoom = ({ onClose }: Modal) => {
+    const router = useRouter()
     const [code, setCode] = useState("")
     const [username, setUsername] = useState("")
     const [error, setError] = useState("")
@@ -31,7 +34,7 @@ const EnterRoom = ({ onClose }: Modal) => {
         }
     }, [onClose])
 
-    const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault()
         if (code.length !== CODE_LENGTH) {
             setError(`Enter the ${CODE_LENGTH}-character room code.`)
@@ -42,11 +45,32 @@ const EnterRoom = ({ onClose }: Modal) => {
             return
         }
         setError("")
+        setSuccess("")
         setIsLoading(true)
-        setSuccess("Code accepted. Joining...")
-        console.log("Joining room:", { code, username })
-        // TODO: replace with your real join call
-        timer.current = setTimeout(onClose, 1500)
+        try {
+            const res = await axios.post(`http://127.0.0.1:8000/api/rooms/${code}/join/`, {
+                username: username.trim(),
+            })
+            sessionStorage.removeItem("dl-left-room")
+            sessionStorage.setItem("dl-username", username.trim())
+            sessionStorage.setItem("dl-role", res.data.role)
+            if (res.data.duration_minutes) sessionStorage.setItem("dl-duration", String(res.data.duration_minutes))
+            sessionStorage.setItem("dl-room-code", res.data.room_code)
+            sessionStorage.setItem("dl-ws-code", code)
+            if (res.data.end_time) sessionStorage.setItem("dl-end-time", res.data.end_time)
+            if (res.data.role === "A") sessionStorage.setItem("dl-admin-code", code)
+            setSuccess("Access granted. Joining...")
+            timer.current = setTimeout(() => router.push(`/room/${res.data.room_code}`), 800)
+        } catch (err: any) {
+            const data = err?.response?.data
+            setError(
+                typeof data === "string"
+                    ? data
+                    : data?.error || data?.detail || data?.message || "Unable to join room."
+            )
+        } finally {
+            setIsLoading(false)
+        }
     }
 
     return (
@@ -55,6 +79,11 @@ const EnterRoom = ({ onClose }: Modal) => {
                 bg-[radial-gradient(ellipse_at_50%_0%,rgba(0,255,102,0.14),transparent_60%),rgba(2,4,3,0.85)]"
             onMouseDown={e => e.target === e.currentTarget && onClose()}
         >
+            <style>{`
+                @keyframes er-in { from { opacity: 0; transform: translateY(14px) scale(.97) } }
+                @media (prefers-reduced-motion: reduce) { .er-in { animation: none !important } }
+            `}</style>
+
             <div
                 role="dialog"
                 aria-modal="true"

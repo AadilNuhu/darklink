@@ -3,24 +3,7 @@
 import { useEffect, useState } from "react";
 import { Check, Copy, ShieldCheck, Users, X } from "lucide-react";
 
-const codes = [
-  {
-    label: "Code for all users",
-    hint: "Gives regular access to the room.",
-    code: "B67H9IS0",
-    Icon: Users,
-    color: "#00ff66",
-  },
-  {
-    label: "Admin access code",
-    hint: "Gives full control. Keep it private.",
-    code: "Q90F3VX9",
-    Icon: ShieldCheck,
-    color: "#fbbf24",
-  },
-];
-
-const GeneratedCode = ({ onClose }: { onClose: () => void }) => {
+const GeneratedCode = ({ onClose, roomCode, adminCode, hostUsername }: { onClose: () => void; roomCode: string; adminCode: string; hostUsername?: string }) => {
   const [copied, setCopied] = useState<string | null>(null);
 
   useEffect(() => {
@@ -44,6 +27,23 @@ const GeneratedCode = ({ onClose }: { onClose: () => void }) => {
     }
   };
 
+  const codes = [
+    { label: "Code for all users", hint: "Gives regular access to the room.", code: roomCode, Icon: Users, color: "#00ff66" },
+    { label: "Admin access code", hint: "Gives full control. Keep it private.", code: adminCode, Icon: ShieldCheck, color: "#fbbf24" },
+  ];
+
+  const adminLink = `http://localhost:3000/room/${adminCode}${hostUsername ? `?u=${encodeURIComponent(hostUsername)}` : ""}`;
+  const [copiedLink, setCopiedLink] = useState(false);
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(adminLink);
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2000);
+    } catch {
+      setCopiedLink(false);
+    }
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-md
@@ -63,8 +63,6 @@ const GeneratedCode = ({ onClose }: { onClose: () => void }) => {
           shadow-[0_0_90px_-25px_rgba(0,255,102,0.45)]"
         style={{ animation: "gc-in .3s cubic-bezier(.2,.8,.2,1) both" }}
       >
-        <div className="absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-[#00ff66] to-transparent" />
-
         <div className="mb-5 flex items-start justify-between">
           <div>
             <h2 id="gc-title" className="text-lg font-semibold tracking-tight">Your room is live</h2>
@@ -102,7 +100,7 @@ const GeneratedCode = ({ onClose }: { onClose: () => void }) => {
                   onClick={() => copy(code)}
                   style={{ backgroundColor: color }}
                   className="flex w-24 items-center justify-center gap-1.5 rounded-lg py-2 text-sm font-semibold text-black
-                    transition hover:brightness-110 active:scale-95
+                    transition hover:brightness-110 active:scale-95 cursor-pointer
                     focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
                 >
                   {copied === code ? <Check size={14} /> : <Copy size={14} />}
@@ -113,6 +111,21 @@ const GeneratedCode = ({ onClose }: { onClose: () => void }) => {
               <p className="mt-1.5 text-xs text-white/45">{hint}</p>
             </div>
           ))}
+        </div>
+
+        <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-2">
+          <p className="mb-1.5 text-xs text-white/50">Admin login link</p>
+          <div className="flex items-center gap-2">
+            <span className="flex-1 pl-2 font-mono text-xs text-white/70 break-all">{adminLink}</span>
+            <button
+              type="button"
+              onClick={copyLink}
+              className="flex w-20 items-center justify-center gap-1.5 rounded-lg bg-[#fbbf24] py-2 text-sm font-semibold text-black transition hover:brightness-110 active:scale-95"
+            >
+              {copiedLink ? <Check size={14} /> : <Copy size={14} />}
+              {copiedLink ? "Copied" : "Copy"}
+            </button>
+          </div>
         </div>
       </div>
     </div>

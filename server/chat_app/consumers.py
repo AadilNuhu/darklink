@@ -35,10 +35,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
         code = self.scope["url_route"]["kwargs"]["session_code"]
 
         self.connection_id = uuid.uuid4()
-        registered = await self.register(
-            code, username, self.connection_id
-        )
-        if registered is None:
+        try:
+            registered = await self.register(code, username, self.connection_id)
+            if registered is None:
+                await self.close(code=4003)
+                return
+        except Exception:
+            import traceback
+            traceback.print_exc()
             await self.close(code=4003)
             return
 
@@ -54,13 +58,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 return
             await self.accept()
             self.accepted = True
-        finally:
-            if not self.accepted:
-                if self.group_joined:
-                    await self.channel_layer.group_discard(
-                        self.group_name, self.channel_name
-                    )
-                await self.unregister(self.connection_id)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            if self.group_joined:
+                await self.channel_layer.group_discard(
+                    self.group_name, self.channel_name
+                )
+            await self.unregister(self.connection_id)
+            return
         self.heartbeat_task = asyncio.create_task(self.heartbeat())
 
     async def disconnect(self, code):
@@ -128,6 +134,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps({"type": "room_closed"}))
         await self.close(code=4001)
 
+    async def timer_started(self, event):
+        await self.send(
+            text_data=json.dumps(
+                {
+                    "type": "timer_started",
+                    "start_time": event.get("start_time"),
+                    "end_time": event.get("end_time"),
+                }
+            )
+        )
+
     @database_sync_to_async
     def register(self, code, username, connection_id):
         return register_connection(code, username, connection_id)
@@ -142,7 +159,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def heartbeat(self):
         while True:
-            await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+            await asyncio.sleep(5)
+            active = await self.is_connection_active(self.connection_id)
+            if not active:
+                await self.close(code=4001)
+                return
             await self.touch(self.connection_id)
 
     @database_sync_to_async

@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     # 'django.contrib.messages',
     'daphne',
     'django.contrib.staticfiles',
+    'corsheaders',
     'rest_framework',
     'chat_app',
     'user',
@@ -73,6 +74,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     # 'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     # 'django.middleware.csrf.CsrfViewMiddleware',
@@ -178,3 +180,8 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [],
     'UNAUTHENTICATED_USER': None,
 }
+
+CORS_ALLOW_ALL_ORIGINS = env_bool('CORS_ALLOW_ALL_ORIGINS', default=DEBUG)
+
+from corsheaders.defaults import default_headers as _cors_default_headers
+CORS_ALLOW_HEADERS = list(_cors_default_headers) + ['x-admin-username', 'x-admin-code']
