@@ -161,6 +161,25 @@ def delete_room(room, *, locked=False):
         return True
 
 
+def mark_member_joined(room, user):
+    if not user.has_joined:
+        user.has_joined = True
+        user.save(update_fields=["has_joined"])
+
+    if room.start_time is not None:
+        return
+    has_joined_admin = room.members.filter(
+        role=AppUser.ADMIN, has_joined=True
+    ).exists()
+    has_joined_user = room.members.filter(
+        role=AppUser.USER, has_joined=True
+    ).exists()
+    if has_joined_admin and has_joined_user:
+        room.start_time = timezone.now()
+        room.end_time = room.start_time + timedelta(minutes=room.duration_minutes)
+        room.save(update_fields=["start_time", "end_time"])
+
+
 @transaction.atomic
 def register_connection(code, username, connection_id):
     admin = find_admin_by_code(username, code)
@@ -184,6 +203,7 @@ def register_connection(code, username, connection_id):
     if not user.has_connected:
         user.has_connected = True
         user.save(update_fields=["has_connected"])
+    mark_member_joined(room, user)
 
     ChatConnection.objects.create(
         id=connection_id,

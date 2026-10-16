@@ -1,5 +1,3 @@
-from datetime import timedelta
-
 from django.core.paginator import EmptyPage, Paginator
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
@@ -23,6 +21,7 @@ from .services import (
     find_admin_by_code,
     hash_admin_code,
     issue_admin_code,
+    mark_member_joined,
     verify_admin_code,
 )
 
@@ -51,19 +50,13 @@ class RoomCollectionView(APIView):
         serializer = CreateRoomSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         values = serializer.validated_data
-        end_time = values.get("end_time") or timezone.now() + timedelta(minutes=15)
-        if end_time <= timezone.now():
-            return Response(
-                {"error": "end_time must be in the future."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
 
         admin_code = issue_admin_code(values["username"])
         with transaction.atomic():
             room = Room.objects.create(
                 group_name=values["group_name"],
                 limit=values["limit"],
-                end_time=end_time,
+                duration_minutes=values["duration_minutes"],
             )
             creator = AppUser.objects.create(
                 username=values["username"],
@@ -149,11 +142,15 @@ class RoomJoinView(APIView):
                         status=status.HTTP_409_CONFLICT,
                     )
 
+            mark_member_joined(room, member)
+
         return Response(
             {
                 "room_code": room.session_code,
                 "username": member.username,
                 "role": member.role,
+                "start_time": room.start_time,
+                "end_time": room.end_time,
             },
             status=status.HTTP_200_OK,
         )
@@ -350,7 +347,7 @@ class RoomRevokeAdminView(APIView):
             member.role = AppUser.USER
             member.admin_code_hash = None
             member.save(update_fields=["role", "admin_code_hash"])
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response({"message": "Admin privileges revoked successfully."}, status=status.HTTP_200_OK)
 
 
 class RoomEndView(APIView):
@@ -393,4 +390,7 @@ class RoomEndView(APIView):
                     status=status.HTTP_410_GONE,
                 )
             delete_room(room, locked=True)
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response(
+            {"message": "Room ended successfully."},
+            status=status.HTTP_200_OK,
+        )

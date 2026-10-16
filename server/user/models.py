@@ -25,6 +25,7 @@ class AppUser(models.Model):
     )
     joined_at = models.DateTimeField(default=timezone.now, editable=False)
     has_connected = models.BooleanField(default=False)
+    has_joined = models.BooleanField(default=False)
 
     class Meta:
         constraints = [
