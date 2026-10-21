@@ -1,7 +1,8 @@
 import { ShieldAlert, X, Minus, Plus, Timer, Users, Loader2 } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 import GeneratedCode from "./GeneratedCode"
 import axios from "axios"
+import { apiErrorMessage, apiUrl } from "../lib/api"
 
 const DURATIONS = [
     { value: "15", label: "15 min" },
@@ -27,14 +28,12 @@ const CreateRoom = ({ onClose }: { onClose: () => void }) => {
     const [isLoading, setIsLoading] = useState(false)
     const [isSubmitted, setIsSubmitted] = useState(false)
     const [codes, setCodes] = useState<{ room_code: string; admin_code: string; username: string } | null>(null)
-    const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose()
         window.addEventListener("keydown", onKey)
         return () => {
             window.removeEventListener("keydown", onKey)
-            clearTimeout(timer.current)
         }
     }, [onClose])
 
@@ -44,33 +43,22 @@ const CreateRoom = ({ onClose }: { onClose: () => void }) => {
     }
     const step = (delta: number) => set("numUsers", Math.min(MAX_USERS, Math.max(MIN_USERS, form.numUsers + delta)))
 
-    const getErrorMessage = (error: any) => {
-        const data = error?.response?.data
-        if (!data) return error?.message || "Failed to create room."
-        if (typeof data === "string") return data
-        if (data.error || data.detail || data.message) return data.error || data.detail || data.message
-        const first = Object.values(data)[0]
-        return Array.isArray(first) ? first[0] : String(first)
-    }
-
     const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault()
         setIsLoading(true)
         setStatus(null)
         try {
-            const res = await axios.post(`http://127.0.0.1:8000/api/rooms/`, {
+            const res = await axios.post(apiUrl("/api/rooms/"), {
                 group_name: form.roomName.trim(),
                 username: form.userhandle.trim(),
                 limit: form.numUsers,
                 duration_minutes: Number(form.duration),
             })
             setCodes(res.data)
+            setIsSubmitted(true)
+        } catch (error: unknown) {
             setIsLoading(false)
-            setStatus({ type: "success", text: "Room created. Generating your code..." })
-            timer.current = setTimeout(() => setIsSubmitted(true), 2000)
-        } catch (error: any) {
-            setIsLoading(false)
-            setStatus({ type: "error", text: getErrorMessage(error) })
+            setStatus({ type: "error", text: apiErrorMessage(error, "Failed to create room.") })
         }
     }
 

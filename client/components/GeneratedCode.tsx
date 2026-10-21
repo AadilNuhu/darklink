@@ -5,6 +5,7 @@ import { Check, Copy, ShieldCheck, Users, X } from "lucide-react";
 
 const GeneratedCode = ({ onClose, roomCode, adminCode, hostUsername }: { onClose: () => void; roomCode: string; adminCode: string; hostUsername?: string }) => {
   const [copied, setCopied] = useState<string | null>(null);
+  const [copyError, setCopyError] = useState("");
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -22,27 +23,37 @@ const GeneratedCode = ({ onClose, roomCode, adminCode, hostUsername }: { onClose
     try {
       await navigator.clipboard.writeText(code);
       setCopied(code);
+      setCopyError("");
     } catch {
       setCopied(null);
+      setCopyError("Clipboard unavailable. Select and copy the code manually.");
     }
   };
 
   const codes = [
-    { label: "Code for all users", hint: "Gives regular access to the room.", code: roomCode, Icon: Users, color: "#00ff66" },
-    { label: "Admin access code", hint: "Gives full control. Keep it private.", code: adminCode, Icon: ShieldCheck, color: "#fbbf24" },
+    { label: "Room code", hint: "Share this code with people you want to invite.", code: roomCode, Icon: Users, color: "#00ff66" },
+    { label: "Admin code", hint: "Private: required to manage and end this room.", code: adminCode, Icon: ShieldCheck, color: "#fbbf24" },
   ];
 
-  const adminLink = `http://localhost:3000/room/${adminCode}${hostUsername ? `?u=${encodeURIComponent(hostUsername)}` : ""}`;
+  const adminPath = `/room/${adminCode}${hostUsername ? `?u=${encodeURIComponent(hostUsername)}` : ""}`;
+  const adminLink = adminPath;
   const [copiedLink, setCopiedLink] = useState(false);
   const copyLink = async () => {
     try {
-      await navigator.clipboard.writeText(adminLink);
+      await navigator.clipboard.writeText(new URL(adminPath, window.location.origin).toString());
       setCopiedLink(true);
-      setTimeout(() => setCopiedLink(false), 2000);
+      setCopyError("");
     } catch {
       setCopiedLink(false);
+      setCopyError("Clipboard unavailable. Copy the admin link manually.");
     }
   };
+
+  useEffect(() => {
+    if (!copiedLink) return;
+    const timer = setTimeout(() => setCopiedLink(false), 2000);
+    return () => clearTimeout(timer);
+  }, [copiedLink]);
 
   return (
     <div
@@ -81,7 +92,7 @@ const GeneratedCode = ({ onClose, roomCode, adminCode, hostUsername }: { onClose
 
         <div className="space-y-4">
           {codes.map(({ label, hint, code, Icon, color }) => (
-            <div key={code}>
+            <div key={label}>
               <div className="mb-1.5 flex items-center gap-2 text-sm text-gray-200">
                 <Icon size={15} style={{ color }} />
                 {label}
@@ -114,7 +125,7 @@ const GeneratedCode = ({ onClose, roomCode, adminCode, hostUsername }: { onClose
         </div>
 
         <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-2">
-          <p className="mb-1.5 text-xs text-white/50">Admin login link</p>
+          <p className="mb-1.5 text-xs text-white/50">Private admin link</p>
           <div className="flex items-center gap-2">
             <span className="flex-1 pl-2 font-mono text-xs text-white/70 break-all">{adminLink}</span>
             <button
@@ -127,6 +138,7 @@ const GeneratedCode = ({ onClose, roomCode, adminCode, hostUsername }: { onClose
             </button>
           </div>
         </div>
+        {copyError && <p role="alert" className="mt-3 text-xs text-amber-300">{copyError}</p>}
       </div>
     </div>
   );

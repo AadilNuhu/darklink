@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Loader2, X } from "lucide-react"
-import axios from "axios"
+import { apiErrorMessage, joinRoom } from "../lib/api"
 
 type Modal = { onClose: () => void }
 
@@ -48,8 +48,13 @@ const EnterRoom = ({ onClose }: Modal) => {
         setSuccess("")
         setIsLoading(true)
         try {
-            const res = await axios.post(`http://127.0.0.1:8000/api/rooms/${code}/join/`, {
-                username: username.trim(),
+            const res = await joinRoom<{
+                room_code: string
+                role: string
+                duration_minutes: number
+                end_time: string | null
+            }>(code, username.trim(), () => {
+                setSuccess("Your previous connection is closing. Rejoining…")
             })
             sessionStorage.removeItem("dl-left-room")
             sessionStorage.setItem("dl-username", username.trim())
@@ -61,13 +66,8 @@ const EnterRoom = ({ onClose }: Modal) => {
             if (res.data.role === "A") sessionStorage.setItem("dl-admin-code", code)
             setSuccess("Access granted. Joining...")
             timer.current = setTimeout(() => router.push(`/room/${res.data.room_code}`), 800)
-        } catch (err: any) {
-            const data = err?.response?.data
-            setError(
-                typeof data === "string"
-                    ? data
-                    : data?.error || data?.detail || data?.message || "Unable to join room."
-            )
+        } catch (error: unknown) {
+            setError(apiErrorMessage(error, "Unable to join room."))
         } finally {
             setIsLoading(false)
         }
