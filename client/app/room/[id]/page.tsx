@@ -1,0 +1,566 @@
+"use client"
+
+import { Suspense, useEffect, useRef, useState } from "react"
+import { useParams, useRouter } from "next/navigation"
+import axios from "axios"
+import { Send } from "lucide-react"
+import { apiErrorMessage, apiUrl, joinRoom, webSocketUrl } from "../../../lib/api"
+
+type ChatMessage = {
+    id: number | string
+    time: string
+    handle: string
+    text: string
+    system?: boolean
+}
+
+type JoinResponse = {
+    room_code: string
+    username: string
+    role: string
+    duration_minutes: number
+    start_time: string | null
+    end_time: string | null
+}
+
+type HistoryMessage = {
+    id: number
+    username: string
+    content: string
+    datetime: string
+}
+
+const SESSION_KEYS = [
+    "dl-username",
+    "dl-role",
+    "dl-room-code",
+    "dl-ws-code",
+    "dl-admin-code",
+    "dl-duration",
+    "dl-end-time",
+    "dl-left-room",
+]
+
+function clearRoomSession() {
+    SESSION_KEYS.forEach((key) => sessionStorage.removeItem(key))
+}
+
+function formatMessageTime(value: string) {
+    const match = value.match(
+        /^([A-Z][a-z]{2}) (\d{1,2}), (\d{4}), (\d{2}):(\d{2}) (AM|PM) UTC$/
+    )
+    if (!match) return value
+
+    const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].indexOf(match[1])
+    if (month < 0) return value
+
+    const hour = Number(match[4]) % 12 + (match[6] === "PM" ? 12 : 0)
+    const date = new Date(Date.UTC(Number(match[3]), month, Number(match[2]), hour, Number(match[5])))
+    return new Intl.DateTimeFormat("en", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+        timeZone: "UTC",
+    }).format(date)
+}
+
+function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]) {
+    const messages = new Map<string, ChatMessage>()
+    for (const message of [...current, ...incoming]) {
+        messages.set(String(message.id), message)
+    }
+    return [...messages.values()].sort((left, right) => {
+        if (typeof left.id === "number" && typeof right.id === "number") {
+            return left.id - right.id
+        }
+        if (typeof left.id === "number") return -1
+        if (typeof right.id === "number") return 1
+        return 0
+    })
+}
+
+function formatCountdown(milliseconds: number) {
+    const seconds = Math.max(0, Math.floor(milliseconds / 1000))
+    const hours = Math.floor(seconds / 3600)
+    const minutes = Math.floor((seconds % 3600) / 60)
+    const remainingSeconds = seconds % 60
+    return hours > 0
+        ? `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`
+        : `${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`
+}
+
+function RoomPage() {
+    const { id: code } = useParams<{ id: string }>()
+    const router = useRouter()
+    const [username, setUsername] = useState("")
+    const [role, setRole] = useState("U")
+    const [roomCode, setRoomCode] = useState("")
+    const [duration, setDuration] = useState<number | null>(null)
+    const [endTime, setEndTime] = useState<string | null>(null)
+    const [now, setNow] = useState(() => Date.now())
+    const remaining = endTime ? new Date(endTime).getTime() - now : null
+    const [messages, setMessages] = useState<ChatMessage[]>([])
+    const [text, setText] = useState("")
+    const [connectionStatus, setConnectionStatus] = useState<"connecting" | "connected" | "disconnected">("connecting")
+    const [roomError, setRoomError] = useState("")
+    const [historyError, setHistoryError] = useState("")
+    const [actionError, setActionError] = useState("")
+    const [isEnding, setIsEnding] = useState(false)
+    const [retry, setRetry] = useState(0)
+    const bottom = useRef<HTMLDivElement>(null)
+    const socketRef = useRef<WebSocket | null>(null)
+    const expiredRef = useRef(false)
+    const activeRouteRef = useRef(code)
+
+    useEffect(() => {
+        let cancelled = false
+        let socket: WebSocket | null = null
+
+        const connect = async () => {
+            if (activeRouteRef.current !== code) {
+                activeRouteRef.current = code
+                setMessages([])
+                setRoomCode("")
+                setDuration(null)
+                setEndTime(null)
+                setHistoryError("")
+                setActionError("")
+                expiredRef.current = false
+            }
+            setConnectionStatus("connecting")
+            setRoomError("")
+            setHistoryError("")
+
+            if (sessionStorage.getItem("dl-left-room") === "1") {
+                router.replace("/")
+                return
+            }
+
+            const storedUsername = sessionStorage.getItem("dl-username")
+            const storedRole = sessionStorage.getItem("dl-role")
+            const storedRoomCode = sessionStorage.getItem("dl-room-code")
+            const storedSocketCode = sessionStorage.getItem("dl-ws-code")
+            const hasCurrentSession = Boolean(
+                storedUsername && storedRole && storedRoomCode && storedSocketCode === code
+            )
+
+            let activeUsername = hasCurrentSession ? storedUsername : null
+            let activeRole = hasCurrentSession ? storedRole : null
+            let activeRoomCode = hasCurrentSession ? storedRoomCode : null
+            let activeDuration = hasCurrentSession
+                ? Number(sessionStorage.getItem("dl-duration")) || null
+                : null
+            let activeEndTime = hasCurrentSession ? sessionStorage.getItem("dl-end-time") : null
+
+            if (!hasCurrentSession) {
+                activeUsername = new URLSearchParams(window.location.search).get("u")?.trim() || null
+                if (!activeUsername) {
+                    activeUsername = window.prompt("Choose a username to join this room:")?.trim() || null
+                }
+                if (!activeUsername) {
+                    router.replace("/")
+                    return
+                }
+
+                try {
+                    const response = await joinRoom<JoinResponse>(code, activeUsername, () => {
+                        setRoomError("Your previous connection is closing. Rejoining…")
+                    })
+                    if (cancelled) return
+                    setRoomError("")
+                    activeRole = response.data.role
+                    activeRoomCode = response.data.room_code
+                    activeDuration = response.data.duration_minutes
+                    activeEndTime = response.data.end_time
+                    sessionStorage.removeItem("dl-left-room")
+                    sessionStorage.setItem("dl-username", activeUsername)
+                    sessionStorage.setItem("dl-role", activeRole)
+                    sessionStorage.setItem("dl-room-code", activeRoomCode)
+                    sessionStorage.setItem("dl-ws-code", code)
+                    sessionStorage.setItem("dl-duration", String(activeDuration))
+                    if (activeEndTime) {
+                        sessionStorage.setItem("dl-end-time", activeEndTime)
+                    } else {
+                        sessionStorage.removeItem("dl-end-time")
+                    }
+                    if (activeRole === "A") {
+                        sessionStorage.setItem("dl-admin-code", code)
+                    }
+                } catch (error) {
+                    if (!cancelled) {
+                        setRoomError(apiErrorMessage(error, "Unable to join this room."))
+                        setConnectionStatus("disconnected")
+                    }
+                    return
+                }
+            }
+
+            if (cancelled || !activeUsername || !activeRoomCode) return
+
+            setUsername(activeUsername)
+            setRole(activeRole || "U")
+            setRoomCode(activeRoomCode)
+            setDuration(activeDuration)
+            setEndTime(activeEndTime)
+            setNow(Date.now())
+
+            const query = new URLSearchParams({ username: activeUsername })
+            try {
+                socket = new WebSocket(webSocketUrl(`/ws/chat/${code}/?${query.toString()}`))
+            } catch {
+                if (!cancelled) {
+                    setConnectionStatus("disconnected")
+                    setRoomError("Unable to start the room connection. Check your network settings and try again.")
+                }
+                return
+            }
+            socketRef.current = socket
+
+            socket.onopen = () => {
+                if (cancelled) return
+                setConnectionStatus("connected")
+                axios.get<{ results: HistoryMessage[] }>(
+                    apiUrl(`/api/rooms/${activeRoomCode}/messages/`),
+                    { params: { username: activeUsername, page: 1, page_size: 100 } }
+                ).then((response) => {
+                    if (cancelled) return
+                    const history = response.data.results.map((message) => ({
+                        id: message.id,
+                        time: formatMessageTime(message.datetime),
+                        handle: message.username,
+                        text: message.content,
+                    }))
+                    setMessages((current) => mergeMessages(current, history))
+                }).catch((error: unknown) => {
+                    if (!cancelled) {
+                        setHistoryError(apiErrorMessage(error, "Unable to load message history."))
+                    }
+                })
+            }
+
+            socket.onclose = (event) => {
+                if (!cancelled) {
+                    setConnectionStatus("disconnected")
+                    if (event.code !== 1000) {
+                        setRoomError("The room connection closed. Reconnect to continue chatting.")
+                    }
+                }
+            }
+            socket.onerror = () => {
+                if (!cancelled) {
+                    setConnectionStatus("disconnected")
+                    setRoomError("The connection to this room failed. Check your connection and try again.")
+                }
+            }
+            socket.onmessage = (event) => {
+                try {
+                    const data: unknown = JSON.parse(event.data)
+                    if (!data || typeof data !== "object") {
+                        throw new Error("The server sent an invalid message.")
+                    }
+                    const envelope = data as Record<string, unknown>
+                    if (envelope.type === "room_closed") {
+                        clearRoomSession()
+                        router.replace("/")
+                        return
+                    }
+                    if (envelope.type === "timer_started" && typeof envelope.end_time === "string") {
+                        sessionStorage.setItem("dl-end-time", envelope.end_time)
+                        setEndTime(envelope.end_time)
+                        setNow(Date.now())
+                        return
+                    }
+                    if (typeof envelope.error === "string") {
+                        setMessages((current) => mergeMessages(current, [{
+                            id: `system-${Date.now()}`,
+                            time: "",
+                            handle: "system",
+                            text: envelope.error as string,
+                            system: true,
+                        }]))
+                        return
+                    }
+
+                    const message = (
+                        envelope.message_data && typeof envelope.message_data === "object"
+                            ? envelope.message_data
+                            : envelope
+                    ) as Record<string, unknown>
+                    if (
+                        typeof message.id === "number" &&
+                        typeof message.username === "string" &&
+                        typeof message.message === "string"
+                    ) {
+                        setMessages((current) => mergeMessages(current, [{
+                            id: message.id as number,
+                            time: typeof message.datetime === "string"
+                                ? formatMessageTime(message.datetime)
+                                : "",
+                            handle: message.username as string,
+                            text: message.message as string,
+                        }]))
+                    }
+                } catch (error) {
+                    if (!cancelled) {
+                        setRoomError(
+                            error instanceof Error
+                                ? error.message
+                                : "The server sent an invalid message."
+                        )
+                    }
+                }
+            }
+        }
+
+        void connect()
+        return () => {
+            cancelled = true
+            socket?.close()
+            if (socketRef.current === socket) socketRef.current = null
+        }
+    }, [code, retry, router])
+
+    useEffect(() => {
+        bottom.current?.scrollIntoView({ block: "end", behavior: "smooth" })
+    }, [messages])
+
+    useEffect(() => {
+        if (!endTime) return
+
+        const timer = window.setInterval(() => {
+            const currentTime = Date.now()
+            setNow(currentTime)
+            if (new Date(endTime).getTime() <= currentTime && !expiredRef.current) {
+                expiredRef.current = true
+                clearRoomSession()
+                socketRef.current?.close()
+                router.replace("/")
+            }
+        }, 1000)
+
+        expiredRef.current = false
+        return () => window.clearInterval(timer)
+    }, [endTime, router])
+
+    const sendMessage = () => {
+        const message = text.trim()
+        const socket = socketRef.current
+        if (!message || message.length > 4000) {
+            return
+        }
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            setActionError("Message not sent. Reconnect to the room and try again.")
+            return
+        }
+        try {
+            socket.send(JSON.stringify({ message }))
+            setActionError("")
+            setText("")
+        } catch {
+            setActionError("Message not sent. Check your connection and try again.")
+        }
+    }
+
+    const leaveRoom = async () => {
+        setActionError("")
+        if (role === "A") {
+            setIsEnding(true)
+            try {
+                await axios.delete(apiUrl(`/api/rooms/${roomCode}/admin/end/`), {
+                    headers: {
+                        "X-Admin-Username": username,
+                        "X-Admin-Code": sessionStorage.getItem("dl-admin-code") || "",
+                    },
+                })
+            } catch (error) {
+                setActionError(apiErrorMessage(error, "Unable to end the room."))
+                setIsEnding(false)
+                return
+            }
+        } else {
+            const socket = socketRef.current
+            if (socket && socket.readyState < WebSocket.CLOSING) {
+                await new Promise<void>((resolve) => {
+                    const timeout = window.setTimeout(resolve, 1500)
+                    socket.addEventListener("close", () => {
+                        window.clearTimeout(timeout)
+                        resolve()
+                    }, { once: true })
+                    socket.close(1000, "User left room")
+                })
+            }
+        }
+
+        clearRoomSession()
+        socketRef.current = null
+        router.replace("/")
+    }
+
+    const timerColor = remaining !== null && remaining < 5 * 60_000
+        ? "text-red-500"
+        : "text-green-400"
+
+    const statusLabel =
+        connectionStatus === "connected" ? "ONLINE"
+            : connectionStatus === "connecting" ? "CONNECTING"
+                : "OFFLINE"
+    const statusColor =
+        connectionStatus === "connected" ? "text-green-400"
+            : connectionStatus === "connecting" ? "text-yellow-400"
+                : "text-red-500"
+
+    const errorText = roomError || historyError || actionError
+
+    return (
+        <main className="flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-[#070a08] font-mono text-sm text-green-400 selection:bg-green-400 selection:text-black">
+            <header className="shrink-0 border-b border-white/10 bg-[#0b100d] px-4 py-3 text-xs sm:px-6">
+                <div className="mx-auto max-w-5xl">
+                    <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0 truncate">
+                            <span className="font-bold tracking-wide text-white">darklink</span>
+                            <span className="text-green-700">://</span>
+                            <span className="text-green-300">{roomCode || code}</span>
+                            {role === "A" && <span className="ml-2 rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-0.5 text-[10px] text-amber-300">ADMIN</span>}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2 sm:gap-4">
+                            <span className={`rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 ${statusColor}`}>
+                                <span className="hidden sm:inline">[{statusLabel}]</span>
+                                <span className="sm:hidden">{statusLabel === "ONLINE" ? "LIVE" : statusLabel}</span>
+                            </span>
+                            <span title={endTime || undefined} className={`hidden sm:inline-flex ${timerColor}`}>
+                            {remaining !== null
+                                ? formatCountdown(remaining)
+                                : duration ? `${duration}m (waiting)` : "--:--"}
+                            </span>
+                            <button
+                                type="button"
+                                onClick={leaveRoom}
+                                disabled={isEnding}
+                                className="cursor-pointer rounded-lg border border-white/10 px-3 py-1.5 text-white/75 transition hover:border-green-400/40 hover:bg-green-400/10 hover:text-green-300 disabled:cursor-wait disabled:opacity-50"
+                            >
+                                {isEnding ? "Closing…" : role === "A" ? "End room" : "Leave"}
+                            </button>
+                        </div>
+                    </div>
+                    <div className="mt-2 flex min-w-0 items-center gap-2 truncate text-[11px] text-white/40">
+                        <span className="truncate">{username || "joining..."}</span>
+                        <span className="text-white/20">·</span>
+                        <span className="truncate">Private room · messages expire with the room</span>
+                    </div>
+                </div>
+            </header>
+
+            <section className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">
+                <div className="mx-auto w-full max-w-5xl">
+                    <p className="mb-3 text-xs text-green-700">
+                        <span className="text-green-500">$</span> connected to room {roomCode || code}
+                    </p>
+                    {connectionStatus === "connecting" && (
+                        <p role="status" className="mb-3 text-xs text-yellow-300">Establishing connection…</p>
+                    )}
+                    {connectionStatus === "connected" && (
+                        <p className="mb-5 text-xs text-green-700">Connection established. Your messages appear here.</p>
+                    )}
+
+                    {errorText && (
+                        <p role="alert" className="mb-4 rounded-lg border border-red-400/20 bg-red-400/[0.06] px-3 py-2 text-xs text-red-300">
+                            {errorText}
+                            {connectionStatus === "disconnected" && (
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setRoomError("")
+                                        setRetry((attempt) => attempt + 1)
+                                    }}
+                                    className="ml-3 cursor-pointer text-green-300 underline underline-offset-2"
+                                >
+                                    Reconnect
+                                </button>
+                            )}
+                        </p>
+                    )}
+
+                    {messages.length === 0 && connectionStatus === "connected" && !historyError && (
+                        <p className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-xs text-white/35">
+                            No messages yet. Start the conversation below.
+                        </p>
+                    )}
+
+                    <div className="space-y-3">
+                        {messages.map((message) => {
+                            const isOwnMessage = message.handle === username
+                            if (message.system) {
+                                return (
+                                    <p key={message.id} className="whitespace-pre-wrap break-words rounded-lg border border-amber-300/15 bg-amber-300/[0.05] px-3 py-2 text-xs text-amber-200">
+                                        {message.text}
+                                    </p>
+                                )
+                            }
+                            return <article key={message.id} className={`max-w-[92%] rounded-2xl border px-3.5 py-2.5 sm:max-w-[80%] ${isOwnMessage ? "ml-auto border-green-400/20 bg-green-400/[0.08]" : "border-white/[0.08] bg-white/[0.035]"}`}>
+                                <div className="mb-1 flex items-center gap-2 text-[11px]">
+                                    <span className={isOwnMessage ? "font-semibold text-green-300" : "font-semibold text-cyan-300"}>
+                                        {message.handle}
+                                    </span>
+                                    {message.time && (
+                                        <span className="hidden text-white/30 sm:inline" title={`${message.time} UTC`}>
+                                            {message.time}
+                                        </span>
+                                    )}
+                                </div>
+                                <p className="whitespace-pre-wrap break-words leading-6 text-white/85">{message.text}</p>
+                            </article>
+                        })}
+                    </div>
+                    <div ref={bottom} />
+                </div>
+            </section>
+
+            <footer className="shrink-0 border-t border-white/10 bg-[#0b100d] px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6">
+                <div className="mx-auto max-w-5xl">
+                    <div className="flex items-end gap-2">
+                        <textarea
+                            id="message"
+                            value={text}
+                            rows={1}
+                            maxLength={4000}
+                            autoComplete="off"
+                            spellCheck={false}
+                            placeholder={connectionStatus === "connected" ? "type here and press enter..." : "offline"}
+                            onChange={(event) => setText(event.target.value)}
+                            onKeyDown={(event) => {
+                                if (event.key === "Enter" && !event.shiftKey) {
+                                    event.preventDefault()
+                                    sendMessage()
+                                }
+                            }}
+                            aria-label="Message"
+                            className="max-h-28 min-h-11 min-w-0 flex-1 resize-none rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2 leading-6 text-white caret-green-400 outline-none placeholder:text-white/30 focus:border-green-400/50"
+                        />
+                        <button
+                            type="button"
+                            onClick={sendMessage}
+                            disabled={!text.trim() || connectionStatus !== "connected"}
+                            aria-label="Send message"
+                            className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-green-400 px-3 text-sm font-semibold text-black transition hover:bg-green-300 disabled:cursor-not-allowed disabled:opacity-40 sm:px-4"
+                        >
+                            <Send size={16} />
+                            <span className="hidden sm:inline">Send</span>
+                        </button>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between text-[10px] text-white/35">
+                        <span className="truncate">Enter to send · Shift+Enter for a new line</span>
+                        <span className="ml-3 shrink-0">{text.length}/4000</span>
+                    </div>
+                </div>
+            </footer>
+        </main>
+    )
+}
+
+export default function Page() {
+    return (
+        <Suspense fallback={<main className="min-h-screen bg-black" />}>
+            <RoomPage />
+        </Suspense>
+    )
+}

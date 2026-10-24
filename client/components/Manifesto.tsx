@@ -1,4 +1,4 @@
-import { X, ArrowUpRight } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 
 const Manifesto = () => {
     return (
@@ -9,7 +9,7 @@ const Manifesto = () => {
                         The internet remembers everything.
                         <br />
                         <span className="text-white">
-                            We think it's okay to forget.
+                            We think it&apos;s okay to forget.
                         </span>
                     </div>
 
