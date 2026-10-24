@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Darklink — Private, temporary conversations",
+  title: "Darklynk — Private, temporary conversations",
   description: "Create private, temporary chat rooms. No accounts, no saved history, just conversation.",
 };
 
