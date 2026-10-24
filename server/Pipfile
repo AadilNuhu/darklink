@@ -12,6 +12,8 @@ channels-redis = "*"
 django-cors-headers = "*"
 dj-database-url = "*"
 psycopg = {extras = ["binary"], version = "*"}
+python-dotenv = "*"
+whitenoise = "*"
 
 [dev-packages]
 
