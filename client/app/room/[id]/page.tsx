@@ -12,6 +12,7 @@ type ChatMessage = {
     handle: string
     text: string
     system?: boolean
+    delivery?: "queued" | "sending" | "unconfirmed"
 }
 
 type JoinResponse = {
@@ -79,6 +80,8 @@ function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]) {
     })
 }
 
+const MAX_QUEUED_MESSAGES = 20
+
 function formatCountdown(milliseconds: number) {
     const seconds = Math.max(0, Math.floor(milliseconds / 1000))
     const hours = Math.floor(seconds / 3600)
@@ -107,18 +110,75 @@ function RoomPage() {
     const [actionError, setActionError] = useState("")
     const [isEnding, setIsEnding] = useState(false)
     const [retry, setRetry] = useState(0)
+    const reconnectTimer = useRef<number | null>(null)
+    const reconnectAttempt = useRef(0)
+    const nextLocalMessageId = useRef(0)
+    const outgoingMessages = useRef<ChatMessage[]>([])
+    const joinUsername = useRef<string | null>(null)
     const bottom = useRef<HTMLDivElement>(null)
     const socketRef = useRef<WebSocket | null>(null)
     const expiredRef = useRef(false)
     const activeRouteRef = useRef(code)
 
+    const updatePendingDelivery = (id: ChatMessage["id"], delivery: ChatMessage["delivery"]) => {
+        outgoingMessages.current = outgoingMessages.current.map((message) =>
+            message.id === id ? { ...message, delivery } : message
+        )
+        setMessages((current) => current.map((message) =>
+            message.id === id ? { ...message, delivery } : message
+        ))
+    }
+
     useEffect(() => {
         let cancelled = false
         let socket: WebSocket | null = null
+        let reconnectScheduled = false
+
+        const scheduleReconnect = () => {
+            if (cancelled || reconnectScheduled) return
+            reconnectScheduled = true
+            const delay = Math.min(1000 * 2 ** reconnectAttempt.current, 15000)
+            reconnectAttempt.current += 1
+            reconnectTimer.current = window.setTimeout(() => {
+                reconnectTimer.current = null
+                setRetry((attempt) => attempt + 1)
+            }, delay)
+        }
+
+        const confirmOutgoingMessage = (username: string, content: string) => {
+            const pending = outgoingMessages.current.find((message) =>
+                message.handle === username &&
+                message.text === content &&
+                message.delivery !== "queued"
+            )
+            if (!pending) return
+            outgoingMessages.current = outgoingMessages.current.filter(
+                (message) => message.id !== pending.id
+            )
+            setMessages((current) => current.filter((message) => message.id !== pending.id))
+        }
+
+        const flushQueuedMessages = () => {
+            const activeSocket = socketRef.current
+            if (!activeSocket || activeSocket.readyState !== WebSocket.OPEN) return
+            for (const message of outgoingMessages.current) {
+                if (message.delivery !== "queued") continue
+                try {
+                    activeSocket.send(JSON.stringify({ message: message.text }))
+                    updatePendingDelivery(message.id, "sending")
+                } catch {
+                    setActionError("Some messages are still queued. Check your connection and try again.")
+                    activeSocket.close()
+                    break
+                }
+            }
+        }
 
         const connect = async () => {
             if (activeRouteRef.current !== code) {
                 activeRouteRef.current = code
+                outgoingMessages.current = []
+                joinUsername.current = null
                 setMessages([])
                 setRoomCode("")
                 setDuration(null)
@@ -153,14 +213,15 @@ function RoomPage() {
             let activeEndTime = hasCurrentSession ? sessionStorage.getItem("dl-end-time") : null
 
             if (!hasCurrentSession) {
-                activeUsername = new URLSearchParams(window.location.search).get("u")?.trim() || null
-                if (!activeUsername) {
-                    activeUsername = window.prompt("Choose a username to join this room:")?.trim() || null
-                }
+                activeUsername =
+                    joinUsername.current ||
+                    new URLSearchParams(window.location.search).get("u")?.trim() ||
+                    null
                 if (!activeUsername) {
                     router.replace("/")
                     return
                 }
+                joinUsername.current = activeUsername
 
                 try {
                     const response = await joinRoom<JoinResponse>(code, activeUsername, () => {
@@ -190,6 +251,7 @@ function RoomPage() {
                     if (!cancelled) {
                         setRoomError(apiErrorMessage(error, "Unable to join this room."))
                         setConnectionStatus("disconnected")
+                        scheduleReconnect()
                     }
                     return
                 }
@@ -211,6 +273,7 @@ function RoomPage() {
                 if (!cancelled) {
                     setConnectionStatus("disconnected")
                     setRoomError("Unable to start the room connection. Check your network settings and try again.")
+                    scheduleReconnect()
                 }
                 return
             }
@@ -218,12 +281,16 @@ function RoomPage() {
 
             socket.onopen = () => {
                 if (cancelled) return
+                reconnectAttempt.current = 0
                 setConnectionStatus("connected")
                 axios.get<{ results: HistoryMessage[] }>(
                     apiUrl(`/api/rooms/${activeRoomCode}/messages/`),
                     { params: { username: activeUsername, page: 1, page_size: 100 } }
                 ).then((response) => {
                     if (cancelled) return
+                    response.data.results.forEach((message) =>
+                        confirmOutgoingMessage(message.username, message.content)
+                    )
                     const history = response.data.results.map((message) => ({
                         id: message.id,
                         time: formatMessageTime(message.datetime),
@@ -236,13 +303,18 @@ function RoomPage() {
                         setHistoryError(apiErrorMessage(error, "Unable to load message history."))
                     }
                 })
+                flushQueuedMessages()
             }
 
             socket.onclose = (event) => {
                 if (!cancelled) {
                     setConnectionStatus("disconnected")
+                    outgoingMessages.current
+                        .filter((message) => message.delivery === "sending")
+                        .forEach((message) => updatePendingDelivery(message.id, "unconfirmed"))
                     if (event.code !== 1000) {
                         setRoomError("The room connection closed. Reconnect to continue chatting.")
+                        scheduleReconnect()
                     }
                 }
             }
@@ -271,6 +343,17 @@ function RoomPage() {
                         return
                     }
                     if (typeof envelope.error === "string") {
+                        const sendingMessage = outgoingMessages.current.find(
+                            (message) => message.delivery === "sending"
+                        )
+                        if (sendingMessage) {
+                            outgoingMessages.current = outgoingMessages.current.filter(
+                                (message) => message.id !== sendingMessage.id
+                            )
+                            setMessages((current) => current.filter(
+                                (message) => message.id !== sendingMessage.id
+                            ))
+                        }
                         setMessages((current) => mergeMessages(current, [{
                             id: `system-${Date.now()}`,
                             time: "",
@@ -291,6 +374,7 @@ function RoomPage() {
                         typeof message.username === "string" &&
                         typeof message.message === "string"
                     ) {
+                        confirmOutgoingMessage(message.username, message.message)
                         setMessages((current) => mergeMessages(current, [{
                             id: message.id as number,
                             time: typeof message.datetime === "string"
@@ -315,6 +399,10 @@ function RoomPage() {
         void connect()
         return () => {
             cancelled = true
+            if (reconnectTimer.current !== null) {
+                window.clearTimeout(reconnectTimer.current)
+                reconnectTimer.current = null
+            }
             socket?.close()
             if (socketRef.current === socket) socketRef.current = null
         }
@@ -344,20 +432,48 @@ function RoomPage() {
 
     const sendMessage = () => {
         const message = text.trim()
-        const socket = socketRef.current
         if (!message || message.length > 4000) {
             return
         }
-        if (!socket || socket.readyState !== WebSocket.OPEN) {
-            setActionError("Message not sent. Reconnect to the room and try again.")
+        if (outgoingMessages.current.length >= MAX_QUEUED_MESSAGES) {
+            setActionError(`You can queue up to ${MAX_QUEUED_MESSAGES} messages while reconnecting.`)
             return
         }
+        const queuedMessage: ChatMessage = {
+            id: `local-${Date.now()}-${++nextLocalMessageId.current}`,
+            time: "",
+            handle: username,
+            text: message,
+            delivery: "queued",
+        }
+        outgoingMessages.current = [...outgoingMessages.current, queuedMessage]
+        setMessages((current) => mergeMessages(current, [queuedMessage]))
+        setActionError("")
+        setText("")
+        if (socketRef.current?.readyState === WebSocket.OPEN) {
+            const socket = socketRef.current
+            try {
+                socket.send(JSON.stringify({ message }))
+                updatePendingDelivery(queuedMessage.id, "sending")
+            } catch {
+                setActionError("Message queued. It will be sent when the connection returns.")
+                socket.close()
+            }
+        }
+    }
+
+    const retryMessage = (id: ChatMessage["id"]) => {
+        updatePendingDelivery(id, "queued")
+        const socket = socketRef.current
+        if (!socket || socket.readyState !== WebSocket.OPEN) return
+        const message = outgoingMessages.current.find((item) => item.id === id)
+        if (!message) return
         try {
-            socket.send(JSON.stringify({ message }))
-            setActionError("")
-            setText("")
+            socket.send(JSON.stringify({ message: message.text }))
+            updatePendingDelivery(id, "sending")
         } catch {
-            setActionError("Message not sent. Check your connection and try again.")
+            setActionError("Message remains queued until the connection returns.")
+            socket.close()
         }
     }
 
@@ -391,6 +507,7 @@ function RoomPage() {
             }
         }
 
+        outgoingMessages.current = []
         clearRoomSession()
         socketRef.current = null
         router.replace("/")
@@ -417,7 +534,7 @@ function RoomPage() {
                 <div className="mx-auto max-w-5xl">
                     <div className="flex items-center justify-between gap-3">
                         <div className="min-w-0 truncate">
-                            <span className="font-bold tracking-wide text-white">darklink</span>
+                            <span className="font-bold tracking-wide text-white">darklynk</span>
                             <span className="text-green-700">://</span>
                             <span className="text-green-300">{roomCode || code}</span>
                             {role === "A" && <span className="ml-2 rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-0.5 text-[10px] text-amber-300">ADMIN</span>}
@@ -506,6 +623,24 @@ function RoomPage() {
                                             {message.time}
                                         </span>
                                     )}
+                                    {message.delivery && (
+                                        <span className="ml-auto text-[10px] text-white/45" role="status">
+                                            {message.delivery === "queued" && "Queued"}
+                                            {message.delivery === "sending" && "Sending…"}
+                                            {message.delivery === "unconfirmed" && (
+                                                <>
+                                                    Not confirmed
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => retryMessage(message.id)}
+                                                        className="ml-2 cursor-pointer text-green-300 underline underline-offset-2"
+                                                    >
+                                                        Retry
+                                                    </button>
+                                                </>
+                                            )}
+                                        </span>
+                                    )}
                                 </div>
                                 <p className="whitespace-pre-wrap break-words leading-6 text-white/85">{message.text}</p>
                             </article>
@@ -539,7 +674,7 @@ function RoomPage() {
                         <button
                             type="button"
                             onClick={sendMessage}
-                            disabled={!text.trim() || connectionStatus !== "connected"}
+                            disabled={!text.trim()}
                             aria-label="Send message"
                             className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-green-400 px-3 text-sm font-semibold text-black transition hover:bg-green-300 disabled:cursor-not-allowed disabled:opacity-40 sm:px-4"
                         >
