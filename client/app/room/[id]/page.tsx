@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useRef, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import axios from "axios"
-import { Send } from "lucide-react"
+import { Send, Timer } from "lucide-react"
 import { apiErrorMessage, apiUrl, joinRoom, webSocketUrl } from "../../../lib/api"
 
 type ChatMessage = {
@@ -81,6 +81,14 @@ function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]) {
 }
 
 const MAX_QUEUED_MESSAGES = 20
+const PARTICIPANT_HUES = [
+    210, 265, 320, 25, 180, 235, 290, 345, 50, 195,
+    250, 305, 10, 165, 220, 275, 330, 35, 190, 245,
+]
+
+function participantHue(index: number) {
+    return PARTICIPANT_HUES[index % PARTICIPANT_HUES.length]
+}
 
 function formatCountdown(milliseconds: number) {
     const seconds = Math.max(0, Math.floor(milliseconds / 1000))
@@ -103,6 +111,14 @@ function RoomPage() {
     const [now, setNow] = useState(() => Date.now())
     const remaining = endTime ? new Date(endTime).getTime() - now : null
     const [messages, setMessages] = useState<ChatMessage[]>([])
+    const participantColors = new Map<string, number>()
+    let participantIndex = 0
+    for (const message of messages) {
+        if (message.system || message.handle === username || participantColors.has(message.handle)) continue
+        participantColors.set(message.handle, participantHue(participantIndex))
+        participantIndex += 1
+    }
+
     const [text, setText] = useState("")
     const [connectionStatus, setConnectionStatus] = useState<"connecting" | "connected" | "disconnected">("connecting")
     const [roomError, setRoomError] = useState("")
@@ -529,7 +545,7 @@ function RoomPage() {
     const errorText = roomError || historyError || actionError
 
     return (
-        <main className="flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-[#070a08] font-mono text-sm text-green-400 selection:bg-green-400 selection:text-black">
+        <main className="flex h-[100dvh] min-h-0 w-full max-w-full flex-col overflow-x-hidden overflow-y-hidden bg-[#070a08] font-mono text-sm text-green-400 selection:bg-green-400 selection:text-black">
             <header className="shrink-0 border-b border-white/10 bg-[#0b100d] px-4 py-3 text-xs sm:px-6">
                 <div className="mx-auto max-w-5xl">
                     <div className="flex items-center justify-between gap-3">
@@ -544,10 +560,16 @@ function RoomPage() {
                                 <span className="hidden sm:inline">[{statusLabel}]</span>
                                 <span className="sm:hidden">{statusLabel === "ONLINE" ? "LIVE" : statusLabel}</span>
                             </span>
-                            <span title={endTime || undefined} className={`hidden sm:inline-flex ${timerColor}`}>
-                            {remaining !== null
-                                ? formatCountdown(remaining)
-                                : duration ? `${duration}m (waiting)` : "--:--"}
+                            <span
+                                title={endTime || (duration ? "Room timer starts when everyone joins." : undefined)}
+                                className={`inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-2 py-1 ${timerColor}`}
+                            >
+                                <Timer size={13} aria-hidden="true" />
+                                <span>
+                                    {remaining !== null
+                                        ? formatCountdown(remaining)
+                                        : duration ? `${duration}m` : "--:--"}
+                                </span>
                             </span>
                             <button
                                 type="button"
@@ -567,8 +589,8 @@ function RoomPage() {
                 </div>
             </header>
 
-            <section className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">
-                <div className="mx-auto w-full max-w-5xl">
+            <section className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">
+                <div className="mx-auto w-full min-w-0 max-w-5xl">
                     <p className="mb-3 text-xs text-green-700">
                         <span className="text-green-500">$</span> connected to room {roomCode || code}
                     </p>
@@ -580,7 +602,7 @@ function RoomPage() {
                     )}
 
                     {errorText && (
-                        <p role="alert" className="mb-4 rounded-lg border border-red-400/20 bg-red-400/[0.06] px-3 py-2 text-xs text-red-300">
+                        <p role="alert" className="mb-4 break-words rounded-lg border border-red-400/20 bg-red-400/[0.06] px-3 py-2 text-xs text-red-300">
                             {errorText}
                             {connectionStatus === "disconnected" && (
                                 <button
@@ -613,9 +635,23 @@ function RoomPage() {
                                     </p>
                                 )
                             }
-                            return <article key={message.id} className={`max-w-[92%] rounded-2xl border px-3.5 py-2.5 sm:max-w-[80%] ${isOwnMessage ? "ml-auto border-green-400/20 bg-green-400/[0.08]" : "border-white/[0.08] bg-white/[0.035]"}`}>
+                            const senderColor = isOwnMessage
+                                ? "hsl(142 71% 55%)"
+                                : `hsl(${participantColors.get(message.handle) ?? 210} 75% 68%)`
+                            return <article
+                                key={message.id}
+                                style={{
+                                    borderColor: isOwnMessage
+                                        ? "rgb(74 222 128 / 20%)"
+                                        : `hsl(${participantColors.get(message.handle) ?? 210} 75% 68% / 25%)`,
+                                    backgroundColor: isOwnMessage
+                                        ? "rgb(74 222 128 / 8%)"
+                                        : `hsl(${participantColors.get(message.handle) ?? 210} 75% 68% / 7%)`,
+                                }}
+                                className={`min-w-0 max-w-[92%] rounded-2xl border px-3.5 py-2.5 sm:max-w-[80%] ${isOwnMessage ? "ml-auto" : ""}`}
+                            >
                                 <div className="mb-1 flex items-center gap-2 text-[11px]">
-                                    <span className={isOwnMessage ? "font-semibold text-green-300" : "font-semibold text-cyan-300"}>
+                                    <span className="font-semibold" style={{ color: senderColor }}>
                                         {message.handle}
                                     </span>
                                     {message.time && (
@@ -650,7 +686,7 @@ function RoomPage() {
                 </div>
             </section>
 
-            <footer className="shrink-0 border-t border-white/10 bg-[#0b100d] px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6">
+            <footer className="min-w-0 shrink-0 border-t border-white/10 bg-[#0b100d] px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6">
                 <div className="mx-auto max-w-5xl">
                     <div className="flex items-end gap-2">
                         <textarea
