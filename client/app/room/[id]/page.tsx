@@ -1,6 +1,6 @@
 "use client"
 
-import { Suspense, useEffect, useRef, useState } from "react"
+import { Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import axios from "axios"
 import { Send, Timer } from "lucide-react"
@@ -134,16 +134,28 @@ function RoomPage() {
     const bottom = useRef<HTMLDivElement>(null)
     const socketRef = useRef<WebSocket | null>(null)
     const expiredRef = useRef(false)
+    const roomEndingRef = useRef(false)
     const activeRouteRef = useRef(code)
 
-    const updatePendingDelivery = (id: ChatMessage["id"], delivery: ChatMessage["delivery"]) => {
+    const notifyRoomEnded = useCallback((message: string) => {
+        if (roomEndingRef.current) return
+        roomEndingRef.current = true
+        outgoingMessages.current = []
+        clearRoomSession()
+        window.alert(message)
+        socketRef.current?.close(1000, "Room ended")
+        socketRef.current = null
+        router.replace("/")
+    }, [router])
+
+    const updatePendingDelivery = useCallback((id: ChatMessage["id"], delivery: ChatMessage["delivery"]) => {
         outgoingMessages.current = outgoingMessages.current.map((message) =>
             message.id === id ? { ...message, delivery } : message
         )
         setMessages((current) => current.map((message) =>
             message.id === id ? { ...message, delivery } : message
         ))
-    }
+    }, [])
 
     useEffect(() => {
         let cancelled = false
@@ -195,6 +207,7 @@ function RoomPage() {
                 activeRouteRef.current = code
                 outgoingMessages.current = []
                 joinUsername.current = null
+                roomEndingRef.current = false
                 setMessages([])
                 setRoomCode("")
                 setDuration(null)
@@ -323,7 +336,7 @@ function RoomPage() {
             }
 
             socket.onclose = (event) => {
-                if (!cancelled) {
+                if (!cancelled && !roomEndingRef.current) {
                     setConnectionStatus("disconnected")
                     outgoingMessages.current
                         .filter((message) => message.delivery === "sending")
@@ -335,7 +348,7 @@ function RoomPage() {
                 }
             }
             socket.onerror = () => {
-                if (!cancelled) {
+                if (!cancelled && !roomEndingRef.current) {
                     setConnectionStatus("disconnected")
                     setRoomError("The connection to this room failed. Check your connection and try again.")
                 }
@@ -348,8 +361,7 @@ function RoomPage() {
                     }
                     const envelope = data as Record<string, unknown>
                     if (envelope.type === "room_closed") {
-                        clearRoomSession()
-                        router.replace("/")
+                        notifyRoomEnded("This room has ended. You’ll be returned to the home page.")
                         return
                     }
                     if (envelope.type === "timer_started" && typeof envelope.end_time === "string") {
@@ -422,7 +434,7 @@ function RoomPage() {
             socket?.close()
             if (socketRef.current === socket) socketRef.current = null
         }
-    }, [code, retry, router])
+    }, [code, retry, router, notifyRoomEnded, updatePendingDelivery])
 
     useEffect(() => {
         bottom.current?.scrollIntoView({ block: "end", behavior: "smooth" })
@@ -436,15 +448,13 @@ function RoomPage() {
             setNow(currentTime)
             if (new Date(endTime).getTime() <= currentTime && !expiredRef.current) {
                 expiredRef.current = true
-                clearRoomSession()
-                socketRef.current?.close()
-                router.replace("/")
+                notifyRoomEnded("The room timer has expired. You’ll be returned to the home page.")
             }
         }, 1000)
 
         expiredRef.current = false
         return () => window.clearInterval(timer)
-    }, [endTime, router])
+    }, [endTime, router, notifyRoomEnded])
 
     const sendMessage = () => {
         const message = text.trim()
@@ -509,6 +519,8 @@ function RoomPage() {
                 setIsEnding(false)
                 return
             }
+            notifyRoomEnded("You ended the room. You’ll be returned to the home page.")
+            return
         } else {
             const socket = socketRef.current
             if (socket && socket.readyState < WebSocket.CLOSING) {
@@ -705,7 +717,7 @@ function RoomPage() {
                                 }
                             }}
                             aria-label="Message"
-                            className="max-h-28 min-h-11 min-w-0 flex-1 resize-none rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2 leading-6 text-white caret-green-400 outline-none placeholder:text-white/30 focus:border-green-400/50"
+                            className="max-h-28 min-h-11 min-w-0 flex-1 resize-none rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2 text-base leading-6 text-white caret-green-400 outline-none placeholder:text-white/30 focus:border-green-400/50 sm:text-sm"
                         />
                         <button
                             type="button"
