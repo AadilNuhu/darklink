@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useRef, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import axios from "axios"
+import { Send } from "lucide-react"
 import { apiErrorMessage, apiUrl, joinRoom, webSocketUrl } from "../../../lib/api"
 
 type ChatMessage = {
@@ -204,7 +205,15 @@ function RoomPage() {
             setNow(Date.now())
 
             const query = new URLSearchParams({ username: activeUsername })
-            socket = new WebSocket(webSocketUrl(`/ws/chat/${code}/?${query.toString()}`))
+            try {
+                socket = new WebSocket(webSocketUrl(`/ws/chat/${code}/?${query.toString()}`))
+            } catch {
+                if (!cancelled) {
+                    setConnectionStatus("disconnected")
+                    setRoomError("Unable to start the room connection. Check your network settings and try again.")
+                }
+                return
+            }
             socketRef.current = socket
 
             socket.onopen = () => {
@@ -336,11 +345,20 @@ function RoomPage() {
     const sendMessage = () => {
         const message = text.trim()
         const socket = socketRef.current
-        if (!message || message.length > 4000 || !socket || socket.readyState !== WebSocket.OPEN) {
+        if (!message || message.length > 4000) {
             return
         }
-        socket.send(JSON.stringify({ message }))
-        setText("")
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            setActionError("Message not sent. Reconnect to the room and try again.")
+            return
+        }
+        try {
+            socket.send(JSON.stringify({ message }))
+            setActionError("")
+            setText("")
+        } catch {
+            setActionError("Message not sent. Check your connection and try again.")
+        }
     }
 
     const leaveRoom = async () => {
@@ -394,54 +412,59 @@ function RoomPage() {
     const errorText = roomError || historyError || actionError
 
     return (
-        <main className="flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-black font-mono text-sm text-green-400 selection:bg-green-400 selection:text-black">
-            {/* status bar */}
-            <header className="shrink-0 border-b border-green-900 px-3 py-2 text-xs sm:px-6">
-                <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-                    <div className="min-w-0 truncate">
-                        <span className="font-bold text-green-400">darklink</span>
-                        <span className="text-green-700">://</span>
-                        <span className="text-green-300">{roomCode || code}</span>
-                        {role === "A" && <span className="ml-2 text-yellow-400">[admin]</span>}
-                    </div>
-                    <div className="flex items-center gap-4">
-                        <span className={statusColor}>[{statusLabel}]</span>
-                        <span title={endTime || undefined} className={timerColor}>
+        <main className="flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-[#070a08] font-mono text-sm text-green-400 selection:bg-green-400 selection:text-black">
+            <header className="shrink-0 border-b border-white/10 bg-[#0b100d] px-4 py-3 text-xs sm:px-6">
+                <div className="mx-auto max-w-5xl">
+                    <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0 truncate">
+                            <span className="font-bold tracking-wide text-white">darklink</span>
+                            <span className="text-green-700">://</span>
+                            <span className="text-green-300">{roomCode || code}</span>
+                            {role === "A" && <span className="ml-2 rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-0.5 text-[10px] text-amber-300">ADMIN</span>}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2 sm:gap-4">
+                            <span className={`rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 ${statusColor}`}>
+                                <span className="hidden sm:inline">[{statusLabel}]</span>
+                                <span className="sm:hidden">{statusLabel === "ONLINE" ? "LIVE" : statusLabel}</span>
+                            </span>
+                            <span title={endTime || undefined} className={`hidden sm:inline-flex ${timerColor}`}>
                             {remaining !== null
                                 ? formatCountdown(remaining)
                                 : duration ? `${duration}m (waiting)` : "--:--"}
-                        </span>
-                        <button
-                            type="button"
-                            onClick={leaveRoom}
-                            disabled={isEnding}
-                            className="cursor-pointer text-green-400 hover:bg-green-400 hover:text-black disabled:cursor-wait disabled:opacity-50"
-                        >
-                            [{isEnding ? "closing..." : role === "A" ? "end room" : "exit"}]
-                        </button>
+                            </span>
+                            <button
+                                type="button"
+                                onClick={leaveRoom}
+                                disabled={isEnding}
+                                className="cursor-pointer rounded-lg border border-white/10 px-3 py-1.5 text-white/75 transition hover:border-green-400/40 hover:bg-green-400/10 hover:text-green-300 disabled:cursor-wait disabled:opacity-50"
+                            >
+                                {isEnding ? "Closing…" : role === "A" ? "End room" : "Leave"}
+                            </button>
+                        </div>
                     </div>
-                </div>
-                <div className="mt-1 truncate text-green-700">
-                    session: {username || "joining..."} | encrypted channel | messages expire with room
+                    <div className="mt-2 flex min-w-0 items-center gap-2 truncate text-[11px] text-white/40">
+                        <span className="truncate">{username || "joining..."}</span>
+                        <span className="text-white/20">·</span>
+                        <span className="truncate">Private room · messages expire with the room</span>
+                    </div>
                 </div>
             </header>
 
-            {/* output */}
-            <section className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3 sm:px-6">
-                <div className="mx-auto w-full max-w-4xl">
-                    <p className="text-green-700">
-                        $ connect --room {roomCode || code}
+            <section className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">
+                <div className="mx-auto w-full max-w-5xl">
+                    <p className="mb-3 text-xs text-green-700">
+                        <span className="text-green-500">$</span> connected to room {roomCode || code}
                     </p>
                     {connectionStatus === "connecting" && (
-                        <p className="text-yellow-400">establishing connection...</p>
+                        <p role="status" className="mb-3 text-xs text-yellow-300">Establishing connection…</p>
                     )}
                     {connectionStatus === "connected" && (
-                        <p className="mb-2 text-green-700">connection established. type to send.</p>
+                        <p className="mb-5 text-xs text-green-700">Connection established. Your messages appear here.</p>
                     )}
 
                     {errorText && (
-                        <p role="alert" className="mb-2 text-red-500">
-                            ERROR: {errorText}
+                        <p role="alert" className="mb-4 rounded-lg border border-red-400/20 bg-red-400/[0.06] px-3 py-2 text-xs text-red-300">
+                            {errorText}
                             {connectionStatus === "disconnected" && (
                                 <button
                                     type="button"
@@ -449,56 +472,52 @@ function RoomPage() {
                                         setRoomError("")
                                         setRetry((attempt) => attempt + 1)
                                     }}
-                                    className="ml-3 cursor-pointer text-green-400 underline hover:bg-green-400 hover:text-black"
+                                    className="ml-3 cursor-pointer text-green-300 underline underline-offset-2"
                                 >
-                                    [reconnect]
+                                    Reconnect
                                 </button>
                             )}
                         </p>
                     )}
 
                     {messages.length === 0 && connectionStatus === "connected" && !historyError && (
-                        <p className="text-green-700">-- no messages --</p>
+                        <p className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-xs text-white/35">
+                            No messages yet. Start the conversation below.
+                        </p>
                     )}
 
-                    <div className="space-y-0.5">
+                    <div className="space-y-3">
                         {messages.map((message) => {
                             const isOwnMessage = message.handle === username
                             if (message.system) {
                                 return (
-                                    <p key={message.id} className="whitespace-pre-wrap break-words text-yellow-400">
-                                        *** {message.text}
+                                    <p key={message.id} className="whitespace-pre-wrap break-words rounded-lg border border-amber-300/15 bg-amber-300/[0.05] px-3 py-2 text-xs text-amber-200">
+                                        {message.text}
                                     </p>
                                 )
                             }
-                            return (
-                                <p key={message.id} className="whitespace-pre-wrap break-words leading-6">
+                            return <article key={message.id} className={`max-w-[92%] rounded-2xl border px-3.5 py-2.5 sm:max-w-[80%] ${isOwnMessage ? "ml-auto border-green-400/20 bg-green-400/[0.08]" : "border-white/[0.08] bg-white/[0.035]"}`}>
+                                <div className="mb-1 flex items-center gap-2 text-[11px]">
+                                    <span className={isOwnMessage ? "font-semibold text-green-300" : "font-semibold text-cyan-300"}>
+                                        {message.handle}
+                                    </span>
                                     {message.time && (
-                                        <span className="text-green-800" title={`${message.time} UTC`}>
-                                            [{message.time}]{" "}
+                                        <span className="hidden text-white/30 sm:inline" title={`${message.time} UTC`}>
+                                            {message.time}
                                         </span>
                                     )}
-                                    <span className={isOwnMessage ? "font-bold text-green-400" : "font-bold text-cyan-400"}>
-                                        &lt;{message.handle}&gt;
-                                    </span>{" "}
-                                    <span className={isOwnMessage ? "text-green-300" : "text-gray-200"}>
-                                        {message.text}
-                                    </span>
-                                </p>
-                            )
+                                </div>
+                                <p className="whitespace-pre-wrap break-words leading-6 text-white/85">{message.text}</p>
+                            </article>
                         })}
                     </div>
                     <div ref={bottom} />
                 </div>
             </section>
 
-            {/* prompt */}
-            <footer className="shrink-0 border-t border-green-900 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-6">
-                <div className="mx-auto max-w-4xl">
-                    <div className="flex items-start gap-2">
-                        <label htmlFor="message" className="shrink-0 select-none py-1 leading-6 text-green-500">
-                            {username || "guest"}@darklink:~$
-                        </label>
+            <footer className="shrink-0 border-t border-white/10 bg-[#0b100d] px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6">
+                <div className="mx-auto max-w-5xl">
+                    <div className="flex items-end gap-2">
                         <textarea
                             id="message"
                             value={text}
@@ -514,12 +533,23 @@ function RoomPage() {
                                     sendMessage()
                                 }
                             }}
-                            className="max-h-28 min-h-8 min-w-0 flex-1 resize-none border border-green-900 bg-transparent px-2 py-1 leading-6 text-green-300 caret-green-400 outline-none placeholder:text-green-700 focus:border-green-400"
+                            aria-label="Message"
+                            className="max-h-28 min-h-11 min-w-0 flex-1 resize-none rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2 leading-6 text-white caret-green-400 outline-none placeholder:text-white/30 focus:border-green-400/50"
                         />
+                        <button
+                            type="button"
+                            onClick={sendMessage}
+                            disabled={!text.trim() || connectionStatus !== "connected"}
+                            aria-label="Send message"
+                            className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-green-400 px-3 text-sm font-semibold text-black transition hover:bg-green-300 disabled:cursor-not-allowed disabled:opacity-40 sm:px-4"
+                        >
+                            <Send size={16} />
+                            <span className="hidden sm:inline">Send</span>
+                        </button>
                     </div>
-                    <div className="mt-1 flex items-center justify-between text-[11px] text-green-800">
-                        <span className="truncate">enter: send | shift+enter: new line</span>
-                        <span>{text.length}/4000</span>
+                    <div className="mt-2 flex items-center justify-between text-[10px] text-white/35">
+                        <span className="truncate">Enter to send · Shift+Enter for a new line</span>
+                        <span className="ml-3 shrink-0">{text.length}/4000</span>
                     </div>
                 </div>
             </footer>

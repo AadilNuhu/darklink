@@ -8,30 +8,27 @@ import EnterRoom from "./EnterRoom";
 import { useState } from "react";
 
 const LandingPage = () => {
-  const [showCreateRoom, setShowCreateRoom] = useState<Boolean>(false)
-  const [showEnterRoom, setShowEnterRoom] = useState<Boolean>(false)
+  const [showCreateRoom, setShowCreateRoom] = useState<boolean>(false)
+  const [showEnterRoom, setShowEnterRoom] = useState<boolean>(false)
   return (
-    <main className="relative min-h-screen overflow-hidden bg-black text-white">
-      {/* Background image */}
-      <div className=" inset-y-0 right-0 w-full md:w-[52%]">
+    <main className="relative overflow-hidden bg-black text-white">
+      <section id="top" className="relative isolate flex min-h-[calc(100svh-4.5rem)] items-center overflow-hidden">
+      <div className="pointer-events-none absolute inset-0">
         <Image
           src={img}
           alt="Dark background"
           fill
           priority
-          className="object-cover opacity-30 md:opacity-45"
+          className="object-cover object-center opacity-25 md:object-[65%_center] md:opacity-40"
         />
 
-        {/* Dark overlays */}
-        <div className="absolute inset-0 bg-gradient-to-r from-black via-black/80 to-black/30" />
-        <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black/40" />
+        <div className="absolute inset-0 bg-gradient-to-r from-black via-black/75 to-black/25" />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/30" />
       </div>
 
-      {/* Green ambient glow */}
-      <div className="absolute right-[10%] top-[25%] h-64 w-64 rounded-full bg-[#00ff66]/10 blur-[120px]" />
+      <div className="pointer-events-none absolute right-[10%] top-[25%] h-64 w-64 rounded-full bg-[#00ff66]/10 blur-[120px]" />
 
-      {/* Content */}
-      <section className="relative z-10 mx-auto flex min-h-screen max-w-7xl items-center px-5 py-12 sm:px-8 lg:px-12">
+      <div className="relative z-10 mx-auto w-full max-w-7xl px-5 py-20 sm:px-8 lg:px-12">
         <div className="w-full max-w-3xl">
           {/* Status */}
           <div className="mb-7 flex items-center gap-2 font-mono text-[10px] tracking-[0.25em] text-[#00ff66] sm:text-xs">
@@ -61,11 +58,11 @@ const LandingPage = () => {
 
           {/* CTA area */}
           <div className="mt-10 flex flex-col gap-3 sm:flex-row">
-            <button className="group relative overflow-hidden border border-[#00ff66]/60 bg-[#00ff66] cursor-pointer px-7 py-3 font-mono text-xs font-bold tracking-widest text-black transition-all duration-300 hover:bg-[#00ff66]/90 hover:shadow-[0_0_30px_rgba(0,255,102,0.2)]" onClick={() => setShowCreateRoom(true)} >
+            <button className="group relative min-h-12 cursor-pointer rounded-lg border border-[#00ff66]/60 bg-[#00ff66] px-7 py-3 font-mono text-xs font-bold tracking-widest text-black transition-all duration-300 hover:bg-[#00ff66]/90 hover:shadow-[0_0_30px_rgba(0,255,102,0.2)] sm:min-w-48" onClick={() => setShowCreateRoom(true)} >
              CREATE A ROOM
             </button>
 
-            <button className="border border-white/10 bg-white/[0.03] px-7 py-3 font-mono text-xs cursor-pointer tracking-widest text-white/60 backdrop-blur-sm transition hover:border-white/20 hover:text-white" onClick={() => setShowEnterRoom(true)}>
+            <button className="min-h-12 cursor-pointer rounded-lg border border-white/15 bg-white/[0.04] px-7 py-3 font-mono text-xs tracking-widest text-white/75 backdrop-blur-sm transition hover:border-white/30 hover:bg-white/[0.08] hover:text-white sm:min-w-48" onClick={() => setShowEnterRoom(true)}>
               ENTER A ROOM
             </button>
           </div>
@@ -77,13 +74,13 @@ const LandingPage = () => {
             <span>● JUST TEXT</span>
           </div>
         </div>
-      </section>
+      </div>
 
-      {/* Bottom terminal line */}
-      <div className="absolute bottom-5 left-5 right-5 flex items-center justify-between border-t border-white/[0.06] pt-3 font-mono text-[8px] tracking-widest text-white/20 sm:left-8 sm:right-8">
+      <div className="pointer-events-none absolute bottom-4 left-5 right-5 flex items-center justify-between border-t border-white/[0.08] pt-3 font-mono text-[8px] tracking-widest text-white/30 sm:left-8 sm:right-8">
         <span>SESSION // 001</span>
         <span>SECURE CHANNEL</span>
       </div>
+      </section>
       {showCreateRoom && ( <CreateRoom onClose={() => setShowCreateRoom(false)} />)}
       {showEnterRoom && ( <EnterRoom onClose={() => setShowEnterRoom(false)} />)}
 
