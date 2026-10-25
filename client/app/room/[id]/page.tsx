@@ -228,14 +228,15 @@ function RoomPage() {
             const storedUsername = sessionStorage.getItem("dl-username")
             const storedRole = sessionStorage.getItem("dl-role")
             const storedRoomCode = sessionStorage.getItem("dl-room-code")
-            const storedSocketCode = sessionStorage.getItem("dl-ws-code")
+            const storedSocketCode = sessionStorage.getItem("dl-ws-code") || ""
             const hasCurrentSession = Boolean(
-                storedUsername && storedRole && storedRoomCode && storedSocketCode === code
+                storedUsername && storedRole && storedRoomCode === code && storedSocketCode
             )
 
             let activeUsername = hasCurrentSession ? storedUsername : null
             let activeRole = hasCurrentSession ? storedRole : null
             let activeRoomCode = hasCurrentSession ? storedRoomCode : null
+            let activeSocketCode = hasCurrentSession ? storedSocketCode : code
             let activeDuration = hasCurrentSession
                 ? Number(sessionStorage.getItem("dl-duration")) || null
                 : null
@@ -260,6 +261,7 @@ function RoomPage() {
                     setRoomError("")
                     activeRole = response.data.role
                     activeRoomCode = response.data.room_code
+                    activeSocketCode = code
                     activeDuration = response.data.duration_minutes
                     activeEndTime = response.data.end_time
                     sessionStorage.removeItem("dl-left-room")
@@ -297,7 +299,7 @@ function RoomPage() {
 
             const query = new URLSearchParams({ username: activeUsername })
             try {
-                socket = new WebSocket(webSocketUrl(`/ws/chat/${code}/?${query.toString()}`))
+                socket = new WebSocket(webSocketUrl(`/ws/chat/${activeSocketCode}/?${query.toString()}`))
             } catch {
                 if (!cancelled) {
                     setConnectionStatus("disconnected")
@@ -557,7 +559,7 @@ function RoomPage() {
     const errorText = roomError || historyError || actionError
 
     return (
-        <main className="flex h-[100dvh] min-h-0 w-full max-w-full flex-col overflow-x-hidden overflow-y-hidden bg-[#070a08] font-mono text-sm text-green-400 selection:bg-green-400 selection:text-black">
+        <main className="flex h-[100dvh] min-h-0 w-full min-w-0 max-w-full flex-col overflow-x-clip overflow-y-hidden bg-[#070a08] font-mono text-sm text-green-400 selection:bg-green-400 selection:text-black">
             <header className="shrink-0 border-b border-white/10 bg-[#0b100d] px-4 py-3 text-xs sm:px-6">
                 <div className="mx-auto max-w-5xl">
                     <div className="flex items-center justify-between gap-3">
@@ -601,7 +603,7 @@ function RoomPage() {
                 </div>
             </header>
 
-            <section className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">
+            <section className="min-h-0 min-w-0 w-full flex-1 overflow-x-clip overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">
                 <div className="mx-auto w-full min-w-0 max-w-5xl">
                     <p className="mb-3 text-xs text-green-700">
                         <span className="text-green-500">$</span> connected to room {roomCode || code}
@@ -698,9 +700,9 @@ function RoomPage() {
                 </div>
             </section>
 
-            <footer className="min-w-0 shrink-0 border-t border-white/10 bg-[#0b100d] px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6">
-                <div className="mx-auto max-w-5xl">
-                    <div className="flex items-end gap-2">
+            <footer className="w-full min-w-0 shrink-0 overflow-x-clip border-t border-white/10 bg-[#0b100d] px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6">
+                <div className="mx-auto w-full min-w-0 max-w-5xl">
+                    <div className="flex min-w-0 items-end gap-2">
                         <textarea
                             id="message"
                             value={text}
@@ -717,7 +719,7 @@ function RoomPage() {
                                 }
                             }}
                             aria-label="Message"
-                            className="max-h-28 min-h-11 min-w-0 flex-1 resize-none rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2 text-base leading-6 text-white caret-green-400 outline-none placeholder:text-white/30 focus:border-green-400/50 sm:text-sm"
+                            className="max-h-28 min-h-11 w-0 min-w-0 flex-1 resize-none rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2 text-base leading-6 text-white caret-green-400 outline-none placeholder:text-white/30 focus:border-green-400/50 sm:text-sm"
                         />
                         <button
                             type="button"
