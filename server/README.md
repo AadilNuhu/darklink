@@ -147,3 +147,4 @@ production, also set `DJANGO_DEBUG=False`, `DJANGO_SECRET_KEY`, and
 `DJANGO_ALLOWED_HOSTS`. Set `REDIS_URL` when running multiple ASGI workers.
 Schedule `python manage.py cleanup_rooms` at least once per minute to remove
 expired rooms and stale connections.
+#Update test
