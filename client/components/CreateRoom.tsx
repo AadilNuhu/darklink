@@ -48,17 +48,28 @@ const CreateRoom = ({ onClose }: { onClose: () => void }) => {
         setIsLoading(true)
         setStatus(null)
         try {
-            const res = await axios.post(apiUrl("/api/rooms/"), {
-                group_name: form.roomName.trim(),
-                username: form.userhandle.trim(),
-                limit: form.numUsers,
-                duration_minutes: Number(form.duration),
-            })
+            const res = await axios.post(
+                apiUrl("/api/rooms/"),
+                {
+                    group_name: form.roomName.trim(),
+                    username: form.userhandle.trim(),
+                    limit: form.numUsers,
+                    duration_minutes: Number(form.duration),
+                },
+                { timeout: 30_000 } // give up after 30 seconds
+            )
             setCodes(res.data)
             setIsSubmitted(true)
         } catch (error: unknown) {
             setIsLoading(false)
-            setStatus({ type: "error", text: apiErrorMessage(error, "Failed to create room.") })
+            if (axios.isAxiosError(error) && error.code === "ECONNABORTED") {
+                setStatus({
+                    type: "error",
+                    text: "This is taking too long. Check your connection and try again.",
+                })
+            } else {
+                setStatus({ type: "error", text: apiErrorMessage(error, "Failed to create room.") })
+            }
         }
     }
 
@@ -101,8 +112,8 @@ const CreateRoom = ({ onClose }: { onClose: () => void }) => {
                         <div
                             role={status.type === "error" ? "alert" : "status"}
                             className={`rounded-lg border px-3 py-2 text-xs ${status.type === "error"
-                                    ? "border-red-500/40 bg-red-500/10 text-red-300"
-                                    : "border-[#00ff66]/30 bg-[#00ff66]/10 text-[#6dffa6]"
+                                ? "border-red-500/40 bg-red-500/10 text-red-300"
+                                : "border-[#00ff66]/30 bg-[#00ff66]/10 text-[#6dffa6]"
                                 }`}
                         >
                             {status.text}
@@ -112,7 +123,7 @@ const CreateRoom = ({ onClose }: { onClose: () => void }) => {
                     <div>
                         <label htmlFor="roomName" className={labelCls}>Room name</label>
                         <input id="roomName" value={form.roomName} onChange={e => set("roomName", e.target.value)}
-                            placeholder="Anonym099" autoComplete="off" className={inputCls} />
+                            placeholder="Roomie" autoComplete="off" className={inputCls} />
                     </div>
 
                     {/* Duration + fuse */}
@@ -129,8 +140,8 @@ const CreateRoom = ({ onClose }: { onClose: () => void }) => {
                                         aria-checked={active}
                                         onClick={() => set("duration", d.value)}
                                         className={`cursor-pointer rounded-md py-2 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff66]/60 ${active
-                                                ? "bg-[#00ff66] font-semibold text-black shadow-[0_0_20px_-4px_rgba(0,255,102,0.8)]"
-                                                : "text-white/60 hover:bg-white/5 hover:text-white"
+                                            ? "bg-[#00ff66] font-semibold text-black shadow-[0_0_20px_-4px_rgba(0,255,102,0.8)]"
+                                            : "text-white/60 hover:bg-white/5 hover:text-white"
                                             }`}
                                     >
                                         {d.label}
@@ -138,14 +149,14 @@ const CreateRoom = ({ onClose }: { onClose: () => void }) => {
                                 )
                             })}
                         </div>
-                        <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
+                        {/* <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
                             <div
                                 className="relative h-full rounded-full bg-gradient-to-r from-[#00ff66] via-lime-300 to-amber-400 transition-[width] duration-500"
                                 style={{ width: fill }}
                             >
                                 <span className="absolute right-0 top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-amber-300 shadow-[0_0_12px_3px_rgba(251,191,36,0.8)]" />
                             </div>
-                        </div>
+                        </div> */}
                     </div>
 
                     {/* Seats */}

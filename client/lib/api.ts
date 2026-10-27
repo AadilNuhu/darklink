@@ -1,10 +1,14 @@
 import axios from "axios"
 
 const API_BASE_URL = (
-    process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"
+    process.env.NEXT_PUBLIC_API_URL ||
+    (process.env.NODE_ENV === "development" ? "http://127.0.0.1:8000" : "")
 ).replace(/\/+$/, "")
 
 export function apiUrl(path: string) {
+    if (!API_BASE_URL) {
+        throw new Error("Set NEXT_PUBLIC_API_URL to your backend URL before deploying the client.")
+    }
     return `${API_BASE_URL}/${path.replace(/^\/+/, "")}`
 }
 

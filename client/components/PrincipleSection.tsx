@@ -35,7 +35,7 @@ const PrincipleSection = () => {
         <div className="mb-14 max-w-2xl">
           <div className="mb-5 flex items-center gap-3 font-mono text-xs tracking-[0.25em] text-[#00ff66]">
             <span className="h-px w-8 bg-[#00ff66]" />
-            <span>// BUILT TO DISAPPEAR</span>
+            <span>{"// BUILT TO DISAPPEAR"}</span>
           </div>
 
           <h2 className="text-4xl font-semibold tracking-tight text-white sm:text-5xl lg:text-5xl">
@@ -45,7 +45,7 @@ const PrincipleSection = () => {
           </h2>
 
           <p className="mt-6 max-w-xl text-base leading-7 text-zinc-400">
-            Privacy shouldn't be an afterthought. Every conversation is
+            Privacy shouldn&apos;t be an afterthought. Every conversation is
             designed to exist only for as long as you need it.
           </p>
         </div>
