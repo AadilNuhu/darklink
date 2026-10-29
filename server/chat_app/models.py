@@ -5,7 +5,7 @@ import uuid
 
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
-
+from encrypted_fields.fields import EncryptedTextField
 ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
 
 
@@ -15,7 +15,7 @@ def generate_code(length=8):
 
 class Message(models.Model):
     room = models.ForeignKey("Room", on_delete=models.CASCADE)
-    content = models.TextField()
+    content = EncryptedTextField()
     user = models.ForeignKey(
         "user.AppUser", on_delete=models.CASCADE, related_name="messages"
     )

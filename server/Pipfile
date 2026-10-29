@@ -14,6 +14,7 @@ dj-database-url = "*"
 psycopg = {extras = ["binary"], version = "*"}
 python-dotenv = "*"
 whitenoise = "*"
+django-fernet-encrypted-fields = "*"
 
 [dev-packages]
 
