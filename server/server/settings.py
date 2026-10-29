@@ -25,6 +25,7 @@ def env_bool(name, default=False):
 def env_list(name):
     return os.environ.get(name, '').replace(',', ' ').split()
 
+SALT_KEY = os.environ["SALT_KEY"]
 
 DEBUG = env_bool('DJANGO_DEBUG', default=True)
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
@@ -60,7 +61,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'corsheaders',
     'rest_framework',
-    'chat_app',
+    'chat_app.apps.ChatAppConfig',
     'user',
     'channels',
 ]

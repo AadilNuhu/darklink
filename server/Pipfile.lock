@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "e7a3b19d242eb4928b04e41d8df0f565e3e4658019f23ea64eef1c143df12b47"
+            "sha256": "53651a3109ad0a343984a623a34113747c0af49617f5907b9a19820c15d308aa"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -383,6 +383,15 @@
             "markers": "python_version >= '3.9'",
             "version": "==4.9.0"
         },
+        "django-fernet-encrypted-fields": {
+            "hashes": [
+                "sha256:836c927a260a834a35c4caecf82a97a5e411408cbecb44e25caddd02d8cdd86e",
+                "sha256:b3e4049882b8c7216d868b7aa7533e466a48c1307b5d4b1b8dc4cb5946d87eec"
+            ],
+            "index": "pypi",
+            "markers": "python_version >= '3.10'",
+            "version": "==0.4.0"
+        },
         "djangorestframework": {
             "hashes": [
                 "sha256:446a9b352e7eff630421ab3f2328bd2401b109a9470afa4a31189994911ed030",
@@ -681,11 +690,11 @@
         },
         "tzdata": {
             "hashes": [
-                "sha256:8cc73c0a0bfca7dbfa59235d60b2eff82231dee33f53d206db1acd9173cfc0a7",
-                "sha256:b683bd1b6659ddcd810ff02ad09ba821d4bf1065072805063eb35c49617905ac"
+                "sha256:0a10eec6e13ef16b627fabed9a5f2ba61a62b1c67f327305f4e7e412a70b4aec",
+                "sha256:85d2cd9c09f81f0bb29db27759fc83af4f1e620efb814f8c5bf8b4cc4feece6d"
             ],
             "markers": "python_version >= '2'",
-            "version": "==2026.5"
+            "version": "==2026.6"
         },
         "ujson": {
             "hashes": [
