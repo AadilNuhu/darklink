@@ -81,9 +81,6 @@ function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]) {
 }
 
 const MAX_QUEUED_MESSAGES = 20
-const TYPING_SEND_INTERVAL = 2500 // re-send "typing" at most this often while the user keeps typing
-const TYPING_STOP_DELAY = 3000 // send "stopped typing" after this much silence
-const TYPING_EXPIRE_DELAY = 5000 // hide a remote "typing" if no update arrives (safety net)
 const PARTICIPANT_HUES = [
     210, 265, 320, 25, 180, 235, 290, 345, 50, 195,
     250, 305, 10, 165, 220, 275, 330, 35, 190, 245,
@@ -101,12 +98,6 @@ function formatCountdown(milliseconds: number) {
     return hours > 0
         ? `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`
         : `${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`
-}
-
-function typingLabel(names: string[]) {
-    if (names.length === 1) return `${names[0]} is typing`
-    if (names.length === 2) return `${names[0]} and ${names[1]} are typing`
-    return "Several people are typing"
 }
 
 function RoomPage() {
@@ -135,7 +126,6 @@ function RoomPage() {
     const [actionError, setActionError] = useState("")
     const [isEnding, setIsEnding] = useState(false)
     const [retry, setRetry] = useState(0)
-    const [typingUsers, setTypingUsers] = useState<string[]>([])
     const reconnectTimer = useRef<number | null>(null)
     const reconnectAttempt = useRef(0)
     const nextLocalMessageId = useRef(0)
@@ -148,12 +138,6 @@ function RoomPage() {
     const activeRouteRef = useRef(code)
     const rootRef = useRef<HTMLElement>(null)
     const [keyboardOpen, setKeyboardOpen] = useState(false)
-
-    // Typing indicator refs
-    const typingStopTimer = useRef<number | null>(null)
-    const isTypingSent = useRef(false)
-    const lastTypingSent = useRef(0)
-    const remoteTypingTimers = useRef<Map<string, number>>(new Map())
 
     const notifyRoomEnded = useCallback((message: string) => {
         if (roomEndingRef.current) return
@@ -173,75 +157,6 @@ function RoomPage() {
         setMessages((current) => current.map((message) =>
             message.id === id ? { ...message, delivery } : message
         ))
-    }, [])
-
-    // ---- Typing indicator helpers ----
-    const sendTyping = useCallback((isTyping: boolean) => {
-        const socket = socketRef.current
-        if (!socket || socket.readyState !== WebSocket.OPEN) return
-        try {
-            socket.send(JSON.stringify({ type: "typing", is_typing: isTyping }))
-        } catch {
-            // typing is best-effort; ignore failures
-        }
-    }, [])
-
-    const stopTyping = useCallback(() => {
-        if (typingStopTimer.current !== null) {
-            window.clearTimeout(typingStopTimer.current)
-            typingStopTimer.current = null
-        }
-        if (isTypingSent.current) {
-            isTypingSent.current = false
-            sendTyping(false)
-        }
-    }, [sendTyping])
-
-    const handleTyping = useCallback((value: string) => {
-        if (!value.trim()) {
-            stopTyping()
-            return
-        }
-        const currentTime = Date.now()
-        if (!isTypingSent.current || currentTime - lastTypingSent.current > TYPING_SEND_INTERVAL) {
-            isTypingSent.current = true
-            lastTypingSent.current = currentTime
-            sendTyping(true)
-        }
-        if (typingStopTimer.current !== null) window.clearTimeout(typingStopTimer.current)
-        typingStopTimer.current = window.setTimeout(stopTyping, TYPING_STOP_DELAY)
-    }, [sendTyping, stopTyping])
-
-    const removeRemoteTyping = useCallback((name: string) => {
-        const timer = remoteTypingTimers.current.get(name)
-        if (timer !== undefined) {
-            window.clearTimeout(timer)
-            remoteTypingTimers.current.delete(name)
-        }
-        setTypingUsers((current) => current.filter((user) => user !== name))
-    }, [])
-
-    const setRemoteTyping = useCallback((name: string) => {
-        const existing = remoteTypingTimers.current.get(name)
-        if (existing !== undefined) window.clearTimeout(existing)
-        remoteTypingTimers.current.set(name, window.setTimeout(() => removeRemoteTyping(name), TYPING_EXPIRE_DELAY))
-        setTypingUsers((current) => current.includes(name) ? current : [...current, name])
-    }, [removeRemoteTyping])
-
-    const clearAllRemoteTyping = useCallback(() => {
-        remoteTypingTimers.current.forEach((timer) => window.clearTimeout(timer))
-        remoteTypingTimers.current.clear()
-        setTypingUsers([])
-    }, [])
-
-    // Clean up typing timers on unmount
-    useEffect(() => {
-        const timers = remoteTypingTimers.current
-        return () => {
-            if (typingStopTimer.current !== null) window.clearTimeout(typingStopTimer.current)
-            timers.forEach((timer) => window.clearTimeout(timer))
-            timers.clear()
-        }
     }, [])
 
     // Keeps the layout sized to the visible area so the input sits above the mobile keyboard
@@ -460,8 +375,6 @@ function RoomPage() {
             socket.onclose = (event) => {
                 if (!cancelled && !roomEndingRef.current) {
                     setConnectionStatus("disconnected")
-                    isTypingSent.current = false
-                    clearAllRemoteTyping()
                     outgoingMessages.current
                         .filter((message) => message.delivery === "sending")
                         .forEach((message) => updatePendingDelivery(message.id, "unconfirmed"))
@@ -492,15 +405,6 @@ function RoomPage() {
                         sessionStorage.setItem("dl-end-time", envelope.end_time)
                         setEndTime(envelope.end_time)
                         setNow(Date.now())
-                        return
-                    }
-                    if (envelope.type === "typing" && typeof envelope.username === "string") {
-                        if (envelope.username === activeUsername) return
-                        if (envelope.is_typing) {
-                            setRemoteTyping(envelope.username)
-                        } else {
-                            removeRemoteTyping(envelope.username)
-                        }
                         return
                     }
                     if (typeof envelope.error === "string") {
@@ -536,7 +440,6 @@ function RoomPage() {
                         typeof message.message === "string"
                     ) {
                         confirmOutgoingMessage(message.username, message.message)
-                        removeRemoteTyping(message.username)
                         setMessages((current) => mergeMessages(current, [{
                             id: message.id as number,
                             time: typeof message.datetime === "string"
@@ -568,11 +471,11 @@ function RoomPage() {
             socket?.close()
             if (socketRef.current === socket) socketRef.current = null
         }
-    }, [code, retry, router, notifyRoomEnded, updatePendingDelivery, setRemoteTyping, removeRemoteTyping, clearAllRemoteTyping])
+    }, [code, retry, router, notifyRoomEnded, updatePendingDelivery])
 
     useEffect(() => {
         bottom.current?.scrollIntoView({ block: "end", behavior: "smooth" })
-    }, [messages, typingUsers])
+    }, [messages])
 
     useEffect(() => {
         if (!endTime) return
@@ -599,7 +502,6 @@ function RoomPage() {
             setActionError(`You can queue up to ${MAX_QUEUED_MESSAGES} messages while reconnecting.`)
             return
         }
-        stopTyping()
         const queuedMessage: ChatMessage = {
             id: `local-${Date.now()}-${++nextLocalMessageId.current}`,
             time: "",
@@ -640,7 +542,6 @@ function RoomPage() {
 
     const leaveRoom = async () => {
         setActionError("")
-        stopTyping()
         if (role === "A") {
             setIsEnding(true)
             try {
@@ -834,20 +735,6 @@ function RoomPage() {
                         })}
                     </div>
 
-                    {typingUsers.length > 0 && (
-                        <div role="status" aria-live="polite" className="mt-3 flex items-center gap-2 text-[11px] text-green-600">
-                            <span className="flex items-center gap-0.5" aria-hidden="true">
-                                {[0, 150, 300].map((delay) => (
-                                    <span
-                                        key={delay}
-                                        className="h-1 w-1 animate-bounce rounded-full bg-green-500"
-                                        style={{ animationDelay: `${delay}ms` }}
-                                    />
-                                ))}
-                            </span>
-                            <span className="truncate">{typingLabel(typingUsers)}</span>
-                        </div>
-                    )}
                     <div ref={bottom} />
                 </div>
             </section>
@@ -868,9 +755,7 @@ function RoomPage() {
                             placeholder={connectionStatus === "connected" ? "type here and press enter..." : "offline"}
                             onChange={(event) => {
                                 setText(event.target.value)
-                                handleTyping(event.target.value)
                             }}
-                            onBlur={stopTyping}
                             onKeyDown={(event) => {
                                 if (event.key === "Enter" && !event.shiftKey) {
                                     event.preventDefault()
