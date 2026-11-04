@@ -31,8 +31,6 @@ type HistoryMessage = {
     datetime: string
 }
 
-type Member = { username: string; role: string }
-
 const SESSION_KEYS = [
     "dl-username",
     "dl-role",
@@ -82,25 +80,7 @@ function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]) {
     })
 }
 
-function normalizeMembers(data: unknown): Member[] {
-    const source = data as { members?: unknown[]; results?: unknown[] } | null
-    const list: unknown[] = Array.isArray(data)
-        ? data
-        : source?.members ?? source?.results ?? []
-    return list
-        .map((item) =>
-            typeof item === "string"
-                ? { username: item, role: "U" }
-                : {
-                      username: String((item as Record<string, unknown>)?.username ?? ""),
-                      role: String((item as Record<string, unknown>)?.role ?? "U"),
-                  }
-        )
-        .filter((member) => member.username)
-}
-
 const MAX_QUEUED_MESSAGES = 20
-const MEMBERS_POLL_MS = 5000
 const PARTICIPANT_HUES = [
     210, 265, 320, 25, 180, 235, 290, 345, 50, 195,
     250, 305, 10, 165, 220, 275, 330, 35, 190, 245,
@@ -148,9 +128,7 @@ function RoomPage() {
     const [retry, setRetry] = useState(0)
 
     // Admin state
-    const [members, setMembers] = useState<Member[]>([])
     const [panelOpen, setPanelOpen] = useState(false)
-    const [memberBusy, setMemberBusy] = useState<string | null>(null)
     const [limitInput, setLimitInput] = useState("")
     const [endInput, setEndInput] = useState("")
     const [settingsBusy, setSettingsBusy] = useState(false)
@@ -622,57 +600,25 @@ function RoomPage() {
         "X-Admin-Code": sessionStorage.getItem("dl-admin-code") || "",
     }), [username])
 
-    const loadMembers = useCallback(async () => {
-        if (role !== "A" || !roomCode) return
-        try {
-            const response = await axios.get(apiUrl(`/api/rooms/${roomCode}/admin/members/`), {
-                headers: adminHeaders(),
-            })
-            setMembers(normalizeMembers(response.data))
-        } catch (error) {
-            setActionError(apiErrorMessage(error, "Unable to load members."))
-        }
-    }, [role, roomCode, adminHeaders])
-
-    useEffect(() => {
-        if (!panelOpen || role !== "A") return
-        void loadMembers()
-        const timer = window.setInterval(() => void loadMembers(), MEMBERS_POLL_MS)
-        return () => window.clearInterval(timer)
-    }, [panelOpen, role, loadMembers])
-
-    const memberAction = async (
-        member: string,
-        method: "post" | "delete",
-        suffix: string,
-        confirmText: string | null,
-        failMessage: string
-    ) => {
-        if (confirmText && !window.confirm(confirmText)) return
-        setActionError("")
-        setMemberBusy(member)
-        try {
-            const url = apiUrl(`/api/rooms/${roomCode}/admin/members/${encodeURIComponent(member)}/${suffix}`)
-            await axios.request({ method, url, headers: adminHeaders() })
-            await loadMembers()
-        } catch (error) {
-            setActionError(apiErrorMessage(error, failMessage))
-        } finally {
-            setMemberBusy(null)
-        }
-    }
-
-    const removeMember = (name: string) =>
-        memberAction(name, "delete", "", `Remove ${name} from this room?`, "Unable to remove this user.")
-    const promoteMember = (name: string) =>
-        memberAction(name, "post", "promote/", `Make ${name} an admin?`, "Unable to promote this user.")
-    const revokeMember = (name: string) =>
-        memberAction(name, "post", "revoke/", `Remove admin access from ${name}?`, "Unable to revoke admin access.")
-
     const saveSettings = async () => {
         const body: Record<string, unknown> = {}
-        if (limitInput.trim()) body.limit = Number(limitInput)
-        if (endInput) body.end_time = new Date(endInput).toISOString()
+        // PATCH /api/rooms/{room_code}/admin/  {"limit": 8} and/or {"end_time": "...Z"}
+        if (limitInput.trim()) {
+            const limit = Number(limitInput)
+            if (!Number.isInteger(limit) || limit < 1 || limit > 20) {
+                setActionError("Member limit must be a whole number between 1 and 20.")
+                return
+            }
+            body.limit = limit
+        }
+        if (endInput) {
+            const date = new Date(endInput)
+            if (Number.isNaN(date.getTime())) {
+                setActionError("Enter a valid end time.")
+                return
+            }
+            body.end_time = date.toISOString()
+        }
         if (Object.keys(body).length === 0) return
         setSettingsBusy(true)
         setActionError("")
@@ -692,9 +638,11 @@ function RoomPage() {
         }
     }
 
+    // End and delete the room: DELETE /api/rooms/{room_code}/admin/end/
     const leaveRoom = async () => {
         setActionError("")
         if (role === "A") {
+            if (!window.confirm("End and delete this room for everyone?")) return
             setIsEnding(true)
             try {
                 await axios.delete(apiUrl(`/api/rooms/${roomCode}/admin/end/`), {
@@ -787,7 +735,7 @@ function RoomPage() {
                                     className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-white/75 transition hover:border-green-400/40 hover:bg-green-400/10 hover:text-green-300"
                                 >
                                     <Users size={13} aria-hidden="true" />
-                                    <span className="hidden sm:inline">Members</span>
+                                    <span className="hidden sm:inline">Settings</span>
                                 </button>
                             )}
                             <button
@@ -953,74 +901,24 @@ function RoomPage() {
             {role === "A" && panelOpen && (
                 <aside className="absolute inset-y-0 right-0 z-40 flex w-full max-w-sm flex-col border-l border-white/10 bg-[#0b100d] shadow-2xl">
                     <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-                        <span className="font-bold text-white">Members ({members.length})</span>
+                        <span className="font-bold text-white">Room settings</span>
                         <button
                             type="button"
                             onClick={() => setPanelOpen(false)}
-                            aria-label="Close members panel"
+                            aria-label="Close settings panel"
                             className="cursor-pointer text-white/60 hover:text-white"
                         >
                             <X size={16} />
                         </button>
                     </div>
 
-                    <ul className="min-h-0 flex-1 space-y-2 overflow-y-auto p-4">
-                        {members.length === 0 && (
-                            <li className="text-xs text-white/40">No members loaded yet.</li>
-                        )}
-                        {members.map((member) => {
-                            const isSelf = member.username === username
-                            const isAdmin = member.role === "A"
-                            const busy = memberBusy === member.username
-                            return (
-                                <li key={member.username} className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
-                                    <div className="flex items-center gap-2 text-xs">
-                                        <span className="truncate font-semibold text-white">{member.username}</span>
-                                        {isSelf && <span className="text-white/40">(you)</span>}
-                                        {isAdmin && (
-                                            <span className="rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-0.5 text-[10px] text-amber-300">
-                                                ADMIN
-                                            </span>
-                                        )}
-                                    </div>
-                                    {!isSelf && (
-                                        <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
-                                            {isAdmin ? (
-                                                <button
-                                                    type="button"
-                                                    disabled={busy}
-                                                    onClick={() => revokeMember(member.username)}
-                                                    className="cursor-pointer rounded-lg border border-white/10 px-2.5 py-1 text-white/70 hover:bg-white/5 disabled:opacity-50"
-                                                >
-                                                    Revoke admin
-                                                </button>
-                                            ) : (
-                                                <button
-                                                    type="button"
-                                                    disabled={busy}
-                                                    onClick={() => promoteMember(member.username)}
-                                                    className="cursor-pointer rounded-lg border border-green-400/30 px-2.5 py-1 text-green-300 hover:bg-green-400/10 disabled:opacity-50"
-                                                >
-                                                    Promote
-                                                </button>
-                                            )}
-                                            <button
-                                                type="button"
-                                                disabled={busy}
-                                                onClick={() => removeMember(member.username)}
-                                                className="cursor-pointer rounded-lg border border-red-400/30 px-2.5 py-1 text-red-300 hover:bg-red-400/10 disabled:opacity-50"
-                                            >
-                                                Remove
-                                            </button>
-                                        </div>
-                                    )}
-                                </li>
-                            )
-                        })}
-                    </ul>
+                    <p className="border-b border-white/10 px-4 py-3 text-xs text-white/40">
+                        Note: the backend has no members-list endpoint (<code>GET /api/rooms/{"{room_code}"}/admin/members/</code> is
+                        not defined), so per-member Promote / Revoke / Remove buttons are not wired up. To use them, add that
+                        endpoint to the server first.
+                    </p>
 
-                    <div className="space-y-2 border-t border-white/10 p-4 text-xs">
-                        <p className="font-semibold text-white">Room settings</p>
+                    <div className="space-y-2 p-4 text-xs">
                         <input
                             type="number"
                             min={1}

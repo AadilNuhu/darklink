@@ -51,6 +51,12 @@ export function apiErrorMessage(error: unknown, fallback: string) {
         return error instanceof Error ? error.message : fallback
     }
 
+    // A failed request with no response usually means CORS blocked it or the
+    // server is unreachable. Say so instead of axios's generic "Network Error".
+    if (!error.response) {
+        return "Could not reach the server (network or CORS error)."
+    }
+
     const data: unknown = error.response?.data
     if (typeof data === "string") return data
     if (data && typeof data === "object") {
