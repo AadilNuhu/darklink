@@ -31,7 +31,7 @@ const Navbar = () => {
           title="Terms and Conditions"
         >
           <ShieldCheck className="h-3.5 w-3.5 opacity-80" />
-          <span>Terms & Conditions</span>
+          <span>Terms</span>
         </Link>
       </div>
 
@@ -47,4 +47,4 @@ const Navbar = () => {
   )
 }
 
-export default Navbar
+export default Navbar
