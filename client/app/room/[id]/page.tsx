@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import axios from "axios"
-import { Send, Timer } from "lucide-react"
+import { Send, Timer, Users, X } from "lucide-react"
 import { apiErrorMessage, apiUrl, joinRoom, webSocketUrl } from "../../../lib/api"
 
 type ChatMessage = {
@@ -126,6 +126,16 @@ function RoomPage() {
     const [actionError, setActionError] = useState("")
     const [isEnding, setIsEnding] = useState(false)
     const [retry, setRetry] = useState(0)
+
+    // Admin state
+    const [panelOpen, setPanelOpen] = useState(false)
+    const [limitInput, setLimitInput] = useState("")
+    const [endInput, setEndInput] = useState("")
+    const [settingsBusy, setSettingsBusy] = useState(false)
+
+    // Screenshot deterrent state
+    const [shielded, setShielded] = useState(false)
+
     const reconnectTimer = useRef<number | null>(null)
     const reconnectAttempt = useRef(0)
     const nextLocalMessageId = useRef(0)
@@ -185,6 +195,38 @@ function RoomPage() {
             vv.removeEventListener("resize", update)
             vv.removeEventListener("scroll", update)
             html.style.overflow = prevOverflow
+        }
+    }, [])
+
+    // Screenshot deterrents (best effort only: browsers cannot truly block screenshots)
+    useEffect(() => {
+        const onVisibility = () => setShielded(document.hidden)
+        const onBlur = () => setShielded(true)
+        const onFocus = () => setShielded(false)
+        const onKeyDown = (event: KeyboardEvent) => {
+            const macShot =
+                event.metaKey &&
+                event.shiftKey &&
+                ["Digit3", "Digit4", "Digit5"].includes(event.code)
+            if (event.key === "PrintScreen" || macShot) {
+                setShielded(true)
+                navigator.clipboard?.writeText("").catch(() => {})
+                window.setTimeout(() => setShielded(false), 1500)
+            }
+        }
+        const onContextMenu = (event: Event) => event.preventDefault()
+
+        document.addEventListener("visibilitychange", onVisibility)
+        window.addEventListener("blur", onBlur)
+        window.addEventListener("focus", onFocus)
+        window.addEventListener("keydown", onKeyDown)
+        document.addEventListener("contextmenu", onContextMenu)
+        return () => {
+            document.removeEventListener("visibilitychange", onVisibility)
+            window.removeEventListener("blur", onBlur)
+            window.removeEventListener("focus", onFocus)
+            window.removeEventListener("keydown", onKeyDown)
+            document.removeEventListener("contextmenu", onContextMenu)
         }
     }, [])
 
@@ -373,6 +415,11 @@ function RoomPage() {
             }
 
             socket.onclose = (event) => {
+                // Close code 4403 means the server removed this user from the room
+                if (event.code === 4403 && !cancelled) {
+                    notifyRoomEnded("You were removed from this room by an admin.")
+                    return
+                }
                 if (!cancelled && !roomEndingRef.current) {
                     setConnectionStatus("disconnected")
                     outgoingMessages.current
@@ -399,6 +446,13 @@ function RoomPage() {
                     const envelope = data as Record<string, unknown>
                     if (envelope.type === "room_closed") {
                         notifyRoomEnded("This room has ended. You’ll be returned to the home page.")
+                        return
+                    }
+                    if (
+                        (envelope.type === "member_removed" || envelope.type === "removed") &&
+                        envelope.username === activeUsername
+                    ) {
+                        notifyRoomEnded("You were removed from this room by an admin.")
                         return
                     }
                     if (envelope.type === "timer_started" && typeof envelope.end_time === "string") {
@@ -540,16 +594,59 @@ function RoomPage() {
         }
     }
 
+    // ---- Admin tools ----
+    const adminHeaders = useCallback(() => ({
+        "X-Admin-Username": username,
+        "X-Admin-Code": sessionStorage.getItem("dl-admin-code") || "",
+    }), [username])
+
+    const saveSettings = async () => {
+        const body: Record<string, unknown> = {}
+        // PATCH /api/rooms/{room_code}/admin/  {"limit": 8} and/or {"end_time": "...Z"}
+        if (limitInput.trim()) {
+            const limit = Number(limitInput)
+            if (!Number.isInteger(limit) || limit < 1 || limit > 20) {
+                setActionError("Member limit must be a whole number between 1 and 20.")
+                return
+            }
+            body.limit = limit
+        }
+        if (endInput) {
+            const date = new Date(endInput)
+            if (Number.isNaN(date.getTime())) {
+                setActionError("Enter a valid end time.")
+                return
+            }
+            body.end_time = date.toISOString()
+        }
+        if (Object.keys(body).length === 0) return
+        setSettingsBusy(true)
+        setActionError("")
+        try {
+            await axios.patch(apiUrl(`/api/rooms/${roomCode}/admin/`), body, { headers: adminHeaders() })
+            if (typeof body.end_time === "string") {
+                sessionStorage.setItem("dl-end-time", body.end_time)
+                setEndTime(body.end_time)
+                setNow(Date.now())
+            }
+            setLimitInput("")
+            setEndInput("")
+        } catch (error) {
+            setActionError(apiErrorMessage(error, "Unable to update room settings."))
+        } finally {
+            setSettingsBusy(false)
+        }
+    }
+
+    // End and delete the room: DELETE /api/rooms/{room_code}/admin/end/
     const leaveRoom = async () => {
         setActionError("")
         if (role === "A") {
+            if (!window.confirm("End and delete this room for everyone?")) return
             setIsEnding(true)
             try {
                 await axios.delete(apiUrl(`/api/rooms/${roomCode}/admin/end/`), {
-                    headers: {
-                        "X-Admin-Username": username,
-                        "X-Admin-Code": sessionStorage.getItem("dl-admin-code") || "",
-                    },
+                    headers: adminHeaders(),
                 })
             } catch (error) {
                 setActionError(apiErrorMessage(error, "Unable to end the room."))
@@ -596,8 +693,16 @@ function RoomPage() {
     return (
         <main
             ref={rootRef}
-            className="fixed inset-x-0 top-0 flex h-[100dvh] min-h-0 w-full min-w-0 max-w-full flex-col overflow-x-clip overflow-y-hidden bg-[#070a08] font-mono text-sm text-green-400 selection:bg-green-400 selection:text-black"
+            className="fixed inset-x-0 top-0 flex h-[100dvh] min-h-0 w-full min-w-0 max-w-full select-none flex-col overflow-x-clip overflow-y-hidden bg-[#070a08] font-mono text-sm text-green-400 selection:bg-green-400 selection:text-black"
         >
+            <style>{`@media print { body { display: none !important; } }`}</style>
+
+            {shielded && (
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-black text-xs text-green-700">
+                    Content hidden for privacy
+                </div>
+            )}
+
             <header className="shrink-0 border-b border-white/10 bg-[#0b100d] px-4 py-3 text-xs sm:px-6">
                 <div className="mx-auto max-w-5xl">
                     <div className="flex items-center justify-between gap-3">
@@ -623,6 +728,16 @@ function RoomPage() {
                                         : duration ? `${duration}m` : "--:--"}
                                 </span>
                             </span>
+                            {role === "A" && (
+                                <button
+                                    type="button"
+                                    onClick={() => setPanelOpen(true)}
+                                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-white/75 transition hover:border-green-400/40 hover:bg-green-400/10 hover:text-green-300"
+                                >
+                                    <Users size={13} aria-hidden="true" />
+                                    <span className="hidden sm:inline">Settings</span>
+                                </button>
+                            )}
                             <button
                                 type="button"
                                 onClick={leaveRoom}
@@ -763,7 +878,7 @@ function RoomPage() {
                                 }
                             }}
                             aria-label="Message"
-                            className="max-h-28 min-h-11 w-0 min-w-0 flex-1 resize-none rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2 text-base leading-6 text-white caret-green-400 outline-none placeholder:text-white/30 focus:border-green-400/50 sm:text-sm"
+                            className="max-h-28 min-h-11 w-0 min-w-0 flex-1 select-text resize-none rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2 text-base leading-6 text-white caret-green-400 outline-none placeholder:text-white/30 focus:border-green-400/50 sm:text-sm"
                         />
                         <button
                             type="button"
@@ -782,6 +897,47 @@ function RoomPage() {
                     </div>
                 </div>
             </footer>
+
+            {role === "A" && panelOpen && (
+                <aside className="absolute inset-y-0 right-0 z-40 flex w-full max-w-sm flex-col border-l border-white/10 bg-[#0b100d] shadow-2xl">
+                    <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+                        <span className="font-bold text-white">Room settings</span>
+                        <button
+                            type="button"
+                            onClick={() => setPanelOpen(false)}
+                            aria-label="Close settings panel"
+                            className="cursor-pointer text-white/60 hover:text-white"
+                        >
+                            <X size={16} />
+                        </button>
+                    </div>
+
+                    <div className="space-y-2 p-4 text-xs">
+                        <input
+                            type="number"
+                            min={1}
+                            value={limitInput}
+                            onChange={(event) => setLimitInput(event.target.value)}
+                            placeholder="Member limit"
+                            className="w-full select-text rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2 text-white outline-none focus:border-green-400/50"
+                        />
+                        <input
+                            type="datetime-local"
+                            value={endInput}
+                            onChange={(event) => setEndInput(event.target.value)}
+                            className="w-full select-text rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2 text-white outline-none focus:border-green-400/50"
+                        />
+                        <button
+                            type="button"
+                            onClick={saveSettings}
+                            disabled={settingsBusy || (!limitInput.trim() && !endInput)}
+                            className="w-full cursor-pointer rounded-lg bg-green-400 px-3 py-2 font-semibold text-black disabled:opacity-40"
+                        >
+                            {settingsBusy ? "Saving…" : "Save settings"}
+                        </button>
+                    </div>
+                </aside>
+            )}
         </main>
     )
 }
