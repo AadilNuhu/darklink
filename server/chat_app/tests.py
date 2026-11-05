@@ -6,6 +6,7 @@ from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
 from channels.routing import URLRouter
 from channels.testing import WebsocketCommunicator
+from django.conf import settings
 from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -563,6 +564,68 @@ class RoomApiTests(TestCase):
             ).status_code,
             403,
         )
+
+    def test_room_members_and_count_include_joined_and_currently_online_users(self):
+        room_data = self.create_room()
+        room = Room.objects.get(session_code=room_data["room_code"])
+        AppUser.objects.create(
+            room=room,
+            username="joined",
+            has_joined=True,
+        )
+        online_member = AppUser.objects.create(
+            room=room,
+            username="online",
+            has_joined=True,
+        )
+        stale_member = AppUser.objects.create(
+            room=room,
+            username="stale",
+            has_joined=True,
+        )
+        unjoined_member = AppUser.objects.create(
+            room=room,
+            username="unjoined",
+        )
+        ChatConnection.objects.create(room=room, user=online_member)
+        ChatConnection.objects.create(room=room, user=online_member)
+        stale_connection = ChatConnection.objects.create(
+            room=room, user=stale_member
+        )
+        ChatConnection.objects.filter(pk=stale_connection.pk).update(
+            last_seen=timezone.now()
+            - timedelta(seconds=settings.CHAT_CONNECTION_TIMEOUT_SECONDS + 1)
+        )
+        ChatConnection.objects.create(room=room, user=unjoined_member)
+
+        members_response = self.client.get(
+            f"/api/rooms/{room.session_code}/members/"
+        )
+        self.assertEqual(members_response.status_code, 200)
+        self.assertEqual(
+            members_response.data,
+            {
+                "joined_usernames": ["joined", "online", "stale"],
+                "online_usernames": ["online", "unjoined"],
+            },
+        )
+
+        count_response = self.client.get(
+            f"/api/rooms/{room.session_code}/members/count/"
+        )
+        self.assertEqual(count_response.status_code, 200)
+        self.assertEqual(
+            count_response.data,
+            {"joined_count": 3, "online_count": 2},
+        )
+
+    def test_room_members_endpoints_return_not_found_for_unknown_room(self):
+        for endpoint in ("members/", "members/count/"):
+            with self.subTest(endpoint=endpoint):
+                response = self.client.get(
+                    f"/api/rooms/UNKNOWN1/{endpoint}"
+                )
+                self.assertEqual(response.status_code, 404)
 
     def test_admin_end_deletes_room_members_and_messages(self):
         room_data = self.create_room()

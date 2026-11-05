@@ -70,6 +70,27 @@ Returns `count`, `page`, `page_size`, and `results`. Each message has `id`,
 `username`, `content`, and `datetime`. The username must belong to the room.
 Page size defaults to 50 and is capped at 100.
 
+### Read room members and counts
+
+`GET /api/rooms/{room_code}/members/` returns the usernames of members who have
+joined and members currently online:
+
+```json
+{
+  "joined_usernames": ["guest", "host"],
+  "online_usernames": ["host"]
+}
+```
+
+`GET /api/rooms/{room_code}/members/count/` returns the corresponding counts:
+
+```json
+{"joined_count": 2, "online_count": 1}
+```
+
+Online status is based on active WebSocket connections seen within the
+configured connection timeout.
+
 ### Admin actions
 
 For these actions, send both headers:
