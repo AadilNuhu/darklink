@@ -912,12 +912,6 @@ function RoomPage() {
                         </button>
                     </div>
 
-                    <p className="border-b border-white/10 px-4 py-3 text-xs text-white/40">
-                        Note: the backend has no members-list endpoint (<code>GET /api/rooms/{"{room_code}"}/admin/members/</code> is
-                        not defined), so per-member Promote / Revoke / Remove buttons are not wired up. To use them, add that
-                        endpoint to the server first.
-                    </p>
-
                     <div className="space-y-2 p-4 text-xs">
                         <input
                             type="number"

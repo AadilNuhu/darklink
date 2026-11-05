@@ -22,6 +22,8 @@ from chat_app.views import (
     RoomCollectionView,
     RoomEndView,
     RoomJoinView,
+    RoomMemberCountView,
+    RoomMembersView,
     RoomMessageHistoryView,
     RoomPromoteMemberView,
     RoomRevokeAdminView,
@@ -33,6 +35,16 @@ urlpatterns = [
         "api/rooms/<str:session_code>/join/",
         RoomJoinView.as_view(),
         name="room-join",
+    ),
+    path(
+        "api/rooms/<str:session_code>/members/",
+        RoomMembersView.as_view(),
+        name="room-members",
+    ),
+    path(
+        "api/rooms/<str:session_code>/members/count/",
+        RoomMemberCountView.as_view(),
+        name="room-member-count",
     ),
     path(
         "api/rooms/<str:session_code>/messages/",

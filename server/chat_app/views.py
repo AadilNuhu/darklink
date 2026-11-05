@@ -1,3 +1,6 @@
+from datetime import timedelta
+
+from django.conf import settings
 from django.core.paginator import EmptyPage, Paginator
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
@@ -45,6 +48,23 @@ def get_admin(room, request):
     return admin if verify_admin_code(admin, code) else None
 
 
+def room_member_querysets(room):
+    joined_members = AppUser.objects.filter(room=room, has_joined=True).order_by(
+        "username"
+    )
+    timeout = getattr(settings, "CHAT_CONNECTION_TIMEOUT_SECONDS", 120)
+    active_after = timezone.now() - timedelta(seconds=timeout)
+    online_members = (
+        AppUser.objects.filter(
+            room=room,
+            connections__last_seen__gte=active_after,
+        )
+        .order_by("username")
+        .distinct()
+    )
+    return joined_members, online_members
+
+
 class RoomCollectionView(APIView):
     def post(self, request):
         serializer = CreateRoomSerializer(data=request.data)
@@ -72,6 +92,46 @@ class RoomCollectionView(APIView):
                 "admin_code": admin_code,
             },
             status=status.HTTP_201_CREATED,
+        )
+
+
+class RoomMembersView(APIView):
+    def get(self, request, session_code):
+        room = get_live_room(session_code)
+        if room is None:
+            return Response(
+                {"error": "This room has ended."},
+                status=status.HTTP_410_GONE,
+            )
+
+        joined_members, online_members = room_member_querysets(room)
+        return Response(
+            {
+                "joined_usernames": list(
+                    joined_members.values_list("username", flat=True)
+                ),
+                "online_usernames": list(
+                    online_members.values_list("username", flat=True)
+                ),
+            }
+        )
+
+
+class RoomMemberCountView(APIView):
+    def get(self, request, session_code):
+        room = get_live_room(session_code)
+        if room is None:
+            return Response(
+                {"error": "This room has ended."},
+                status=status.HTTP_410_GONE,
+            )
+
+        joined_members, online_members = room_member_querysets(room)
+        return Response(
+            {
+                "joined_count": joined_members.count(),
+                "online_count": online_members.count(),
+            }
         )
 
 
