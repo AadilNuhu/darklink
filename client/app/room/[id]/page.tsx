@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import axios from "axios"
-import { Send, Timer, Users, X } from "lucide-react"
+import { Send, Settings, X } from "lucide-react"
 import { apiErrorMessage, apiUrl, joinRoom, webSocketUrl } from "../../../lib/api"
 
 type ChatMessage = {
@@ -31,6 +31,32 @@ type HistoryMessage = {
     datetime: string
 }
 
+// GET /api/rooms/{code}/messages/
+type HistoryResponse = {
+    count: number
+    page: number
+    page_size: number
+    results: HistoryMessage[]
+}
+
+// GET /api/rooms/{code}/members/
+type MembersResponse = {
+    joined_usernames: string[]
+    online_usernames: string[]
+}
+
+// GET /api/rooms/{code}/members/count/
+type MemberCountResponse = {
+    joined_count: number
+    online_count: number
+}
+
+// PATCH /api/rooms/{code}/admin/ returns room_details(room), or {"ended": true}
+type UpdateRoomResponse = {
+    ended?: boolean
+    end_time?: string | null
+}
+
 const SESSION_KEYS = [
     "dl-username",
     "dl-role",
@@ -42,8 +68,15 @@ const SESSION_KEYS = [
     "dl-left-room",
 ]
 
+const HISTORY_PAGE_SIZE = 100 // the server caps page_size at 100
+const MEMBERS_POLL_MS = 10_000
+
 function clearRoomSession() {
     SESSION_KEYS.forEach((key) => sessionStorage.removeItem(key))
+}
+
+function errorStatus(error: unknown): number | undefined {
+    return axios.isAxiosError(error) ? error.response?.status : undefined
 }
 
 function formatMessageTime(value: string) {
@@ -127,11 +160,20 @@ function RoomPage() {
     const [isEnding, setIsEnding] = useState(false)
     const [retry, setRetry] = useState(0)
 
+    // Member state (GET members/ and members/count/)
+    const [members, setMembers] = useState<MembersResponse>({ joined_usernames: [], online_usernames: [] })
+    const [counts, setCounts] = useState<{ joined: number; online: number } | null>(null)
+    const [membersError, setMembersError] = useState("")
+
     // Admin state
     const [panelOpen, setPanelOpen] = useState(false)
     const [limitInput, setLimitInput] = useState("")
     const [endInput, setEndInput] = useState("")
     const [settingsBusy, setSettingsBusy] = useState(false)
+    const [memberBusy, setMemberBusy] = useState<string | null>(null)
+    const [adminNotice, setAdminNotice] = useState<{ username: string; code: string } | null>(null)
+    const [adminInfo, setAdminInfo] = useState("")
+    const [selectedMember, setSelectedMember] = useState<string | null>(null)
 
     // Screenshot deterrent state
     const [shielded, setShielded] = useState(false)
@@ -275,6 +317,24 @@ function RoomPage() {
             }
         }
 
+        // History is ordered oldest-first and paginated, so page 1 is the *oldest* messages.
+        // Load the last two pages so the most recent messages are always included.
+        const loadHistory = async (roomCodeForHistory: string, historyUsername: string) => {
+            const url = apiUrl(`/api/rooms/${roomCodeForHistory}/messages/`)
+            const fetchPage = (page: number) =>
+                axios.get<HistoryResponse>(url, {
+                    params: { username: historyUsername, page, page_size: HISTORY_PAGE_SIZE },
+                })
+
+            const first = await fetchPage(1)
+            const lastPage = Math.max(1, Math.ceil(first.data.count / HISTORY_PAGE_SIZE))
+            if (lastPage === 1) return first.data.results
+
+            const wanted = lastPage > 2 ? [lastPage - 1, lastPage] : [lastPage]
+            const pages = await Promise.all(wanted.map(fetchPage))
+            return pages.flatMap((page) => page.data.results)
+        }
+
         const connect = async () => {
             if (activeRouteRef.current !== code) {
                 activeRouteRef.current = code
@@ -330,6 +390,7 @@ function RoomPage() {
                 }
                 joinUsername.current = activeUsername
 
+                // POST /api/rooms/{code}/join/ -> 200 | 404 | 409 | 410
                 try {
                     const response = await joinRoom<JoinResponse>(code, activeUsername, () => {
                         setRoomError("Your previous connection is closing. Rejoining…")
@@ -357,9 +418,17 @@ function RoomPage() {
                     }
                 } catch (error) {
                     if (!cancelled) {
+                        const status = errorStatus(error)
+                        if (status === 410) {
+                            notifyRoomEnded("This room has ended. You’ll be returned to the home page.")
+                            return
+                        }
                         setRoomError(apiErrorMessage(error, "Unable to join this room."))
                         setConnectionStatus("disconnected")
-                        scheduleReconnect()
+                        // 4xx answers (not found, full, name taken) will not fix themselves,
+                        // so only auto-retry network failures, rate limits and server errors.
+                        // The Reconnect button is still available for a manual retry.
+                        if (!status || status >= 500 || status === 429) scheduleReconnect()
                     }
                     return
                 }
@@ -391,15 +460,14 @@ function RoomPage() {
                 if (cancelled) return
                 reconnectAttempt.current = 0
                 setConnectionStatus("connected")
-                axios.get<{ results: HistoryMessage[] }>(
-                    apiUrl(`/api/rooms/${activeRoomCode}/messages/`),
-                    { params: { username: activeUsername, page: 1, page_size: 100 } }
-                ).then((response) => {
+                const historyRoomCode = activeRoomCode as string
+                const historyUsername = activeUsername as string
+                loadHistory(historyRoomCode, historyUsername).then((results) => {
                     if (cancelled) return
-                    response.data.results.forEach((message) =>
+                    results.forEach((message) =>
                         confirmOutgoingMessage(message.username, message.content)
                     )
-                    const history = response.data.results.map((message) => ({
+                    const history = results.map((message) => ({
                         id: message.id,
                         time: formatMessageTime(message.datetime),
                         handle: message.username,
@@ -407,9 +475,12 @@ function RoomPage() {
                     }))
                     setMessages((current) => mergeMessages(current, history))
                 }).catch((error: unknown) => {
-                    if (!cancelled) {
-                        setHistoryError(apiErrorMessage(error, "Unable to load message history."))
+                    if (cancelled) return
+                    if (errorStatus(error) === 410) {
+                        notifyRoomEnded("This room has ended. You’ll be returned to the home page.")
+                        return
                     }
+                    setHistoryError(apiErrorMessage(error, "Unable to load message history."))
                 })
                 flushQueuedMessages()
             }
@@ -547,6 +618,49 @@ function RoomPage() {
         return () => window.clearInterval(timer)
     }, [endTime, router, notifyRoomEnded])
 
+    // ---- Members ----
+    // GET /api/rooms/{room_code}/members/        -> { joined_usernames, online_usernames }
+    // GET /api/rooms/{room_code}/members/count/  -> { joined_count, online_count }
+    // Everyone gets the cheap count; the admin panel loads the full list while it is open.
+    const refreshMembers = useCallback(async (includeList: boolean) => {
+        if (!roomCode) return
+        try {
+            if (includeList) {
+                const response = await axios.get<MembersResponse>(
+                    apiUrl(`/api/rooms/${roomCode}/members/`)
+                )
+                setMembers(response.data)
+                setCounts({
+                    joined: response.data.joined_usernames.length,
+                    online: response.data.online_usernames.length,
+                })
+            } else {
+                const response = await axios.get<MemberCountResponse>(
+                    apiUrl(`/api/rooms/${roomCode}/members/count/`)
+                )
+                setCounts({
+                    joined: response.data.joined_count,
+                    online: response.data.online_count,
+                })
+            }
+            setMembersError("")
+        } catch (error) {
+            if (errorStatus(error) === 410) {
+                notifyRoomEnded("This room has ended. You’ll be returned to the home page.")
+                return
+            }
+            if (includeList) setMembersError(apiErrorMessage(error, "Unable to load members."))
+        }
+    }, [roomCode, notifyRoomEnded])
+
+    const listOpen = role === "A" && panelOpen
+    useEffect(() => {
+        if (!roomCode || connectionStatus !== "connected") return
+        void refreshMembers(listOpen)
+        const timer = window.setInterval(() => void refreshMembers(listOpen), MEMBERS_POLL_MS)
+        return () => window.clearInterval(timer)
+    }, [roomCode, connectionStatus, listOpen, refreshMembers])
+
     const sendMessage = () => {
         const message = text.trim()
         if (!message || message.length > 4000) {
@@ -595,14 +709,16 @@ function RoomPage() {
     }
 
     // ---- Admin tools ----
+    // Every admin endpoint expects X-Admin-Username and X-Admin-Code headers.
     const adminHeaders = useCallback(() => ({
         "X-Admin-Username": username,
         "X-Admin-Code": sessionStorage.getItem("dl-admin-code") || "",
     }), [username])
 
+    // PATCH /api/rooms/{room_code}/admin/  {"limit": 8} and/or {"end_time": "...Z"}
+    // -> room_details | {"ended": true} (end time already passed) | 400 | 403 | 410
     const saveSettings = async () => {
         const body: Record<string, unknown> = {}
-        // PATCH /api/rooms/{room_code}/admin/  {"limit": 8} and/or {"end_time": "...Z"}
         if (limitInput.trim()) {
             const limit = Number(limitInput)
             if (!Number.isInteger(limit) || limit < 1 || limit > 20) {
@@ -622,19 +738,81 @@ function RoomPage() {
         if (Object.keys(body).length === 0) return
         setSettingsBusy(true)
         setActionError("")
+        setAdminInfo("")
         try {
-            await axios.patch(apiUrl(`/api/rooms/${roomCode}/admin/`), body, { headers: adminHeaders() })
-            if (typeof body.end_time === "string") {
-                sessionStorage.setItem("dl-end-time", body.end_time)
-                setEndTime(body.end_time)
+            const response = await axios.patch<UpdateRoomResponse>(
+                apiUrl(`/api/rooms/${roomCode}/admin/`),
+                body,
+                { headers: adminHeaders() }
+            )
+            if (response.data?.ended) {
+                notifyRoomEnded("The room end time has passed. You’ll be returned to the home page.")
+                return
+            }
+            const savedEndTime = typeof response.data?.end_time === "string"
+                ? response.data.end_time
+                : typeof body.end_time === "string"
+                    ? body.end_time
+                    : null
+            if (savedEndTime) {
+                sessionStorage.setItem("dl-end-time", savedEndTime)
+                setEndTime(savedEndTime)
                 setNow(Date.now())
             }
             setLimitInput("")
             setEndInput("")
+            setAdminInfo("Settings saved.")
         } catch (error) {
+            if (errorStatus(error) === 410) {
+                notifyRoomEnded("This room has ended. You’ll be returned to the home page.")
+                return
+            }
             setActionError(apiErrorMessage(error, "Unable to update room settings."))
         } finally {
             setSettingsBusy(false)
+        }
+    }
+
+    // POST /api/rooms/{room_code}/admin/members/{username}/promote/ -> { username, admin_code }
+    // POST /api/rooms/{room_code}/admin/members/{username}/revoke/  -> 204
+    const changeAdmin = async (target: string, action: "promote" | "revoke") => {
+        setMemberBusy(target)
+        setActionError("")
+        setAdminInfo("")
+        setAdminNotice(null)
+        try {
+            const response = await axios.post<{ username: string; admin_code?: string }>(
+                apiUrl(`/api/rooms/${roomCode}/admin/members/${encodeURIComponent(target)}/${action}/`),
+                null,
+                { headers: adminHeaders() }
+            )
+            if (action === "promote" && response.data.admin_code) {
+                // The server only returns the new admin's code once.
+                setAdminNotice({ username: target, code: response.data.admin_code })
+            }
+            if (action === "revoke") {
+                setAdminInfo(`Admin access revoked for ${target}.`)
+                if (target === username) {
+                    // The current admin demoted themselves.
+                    sessionStorage.setItem("dl-role", "U")
+                    sessionStorage.removeItem("dl-admin-code")
+                    setRole("U")
+                    setPanelOpen(false)
+                    return
+                }
+            }
+            await refreshMembers(true)
+        } catch (error) {
+            if (errorStatus(error) === 410) {
+                notifyRoomEnded("This room has ended. You’ll be returned to the home page.")
+                return
+            }
+            setActionError(apiErrorMessage(
+                error,
+                action === "promote" ? "Unable to promote this member." : "Unable to revoke admin access."
+            ))
+        } finally {
+            setMemberBusy(null)
         }
     }
 
@@ -649,9 +827,12 @@ function RoomPage() {
                     headers: adminHeaders(),
                 })
             } catch (error) {
-                setActionError(apiErrorMessage(error, "Unable to end the room."))
-                setIsEnding(false)
-                return
+                // 410 means the room had already expired, so the end goal is met anyway.
+                if (errorStatus(error) !== 410) {
+                    setActionError(apiErrorMessage(error, "Unable to end the room."))
+                    setIsEnding(false)
+                    return
+                }
             }
             notifyRoomEnded("You ended the room. You’ll be returned to the home page.")
             return
@@ -676,19 +857,24 @@ function RoomPage() {
     }
 
     const timerColor = remaining !== null && remaining < 5 * 60_000
-        ? "text-red-500"
-        : "text-green-400"
+        ? "text-red-400"
+        : "text-white/70"
 
-    const statusLabel =
-        connectionStatus === "connected" ? "ONLINE"
-            : connectionStatus === "connecting" ? "CONNECTING"
-                : "OFFLINE"
-    const statusColor =
-        connectionStatus === "connected" ? "text-green-400"
-            : connectionStatus === "connecting" ? "text-yellow-400"
-                : "text-red-500"
+    const dotColor =
+        connectionStatus === "connected" ? "bg-green-400"
+            : connectionStatus === "connecting" ? "bg-yellow-400"
+                : "bg-red-500"
+    const statusText =
+        connectionStatus === "connected" ? (counts ? `${counts.online} online` : "")
+            : connectionStatus === "connecting" ? "connecting…"
+                : "offline"
+
+    const timerText = remaining !== null
+        ? formatCountdown(remaining)
+        : duration ? `${duration}m` : null
 
     const errorText = roomError || historyError || actionError
+    const onlineSet = new Set(members.online_usernames)
 
     return (
         <main
@@ -704,78 +890,61 @@ function RoomPage() {
             )}
 
             <header className="shrink-0 border-b border-white/10 bg-[#0b100d] px-4 py-3 text-xs sm:px-6">
-                <div className="mx-auto max-w-5xl">
-                    <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0 truncate">
-                            <span className="font-bold tracking-wide text-white">darklynk</span>
-                            <span className="text-green-700">://</span>
-                            <span className="text-green-300">{roomCode || code}</span>
-                            {role === "A" && <span className="ml-2 rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-0.5 text-[10px] text-amber-300">ADMIN</span>}
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2 sm:gap-4">
-                            <span className={`rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 ${statusColor}`}>
-                                <span className="hidden sm:inline">[{statusLabel}]</span>
-                                <span className="sm:hidden">{statusLabel === "ONLINE" ? "LIVE" : statusLabel}</span>
-                            </span>
-                            <span
-                                title={endTime || (duration ? "Room timer starts when everyone joins." : undefined)}
-                                className={`inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-2 py-1 ${timerColor}`}
-                            >
-                                <Timer size={13} aria-hidden="true" />
-                                <span>
-                                    {remaining !== null
-                                        ? formatCountdown(remaining)
-                                        : duration ? `${duration}m` : "--:--"}
-                                </span>
-                            </span>
-                            {role === "A" && (
-                                <button
-                                    type="button"
-                                    onClick={() => setPanelOpen(true)}
-                                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-white/75 transition hover:border-green-400/40 hover:bg-green-400/10 hover:text-green-300"
-                                >
-                                    <Users size={13} aria-hidden="true" />
-                                    <span className="hidden sm:inline">Settings</span>
-                                </button>
+                <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2.5">
+                        <span
+                            title={connectionStatus}
+                            className={`h-2 w-2 shrink-0 rounded-full ${dotColor}`}
+                        />
+                        <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-white">{roomCode || code}</p>
+                            {statusText && (
+                                <p className="truncate text-[11px] text-white/40">{statusText}</p>
                             )}
-                            <button
-                                type="button"
-                                onClick={leaveRoom}
-                                disabled={isEnding}
-                                className="cursor-pointer rounded-lg border border-white/10 px-3 py-1.5 text-white/75 transition hover:border-green-400/40 hover:bg-green-400/10 hover:text-green-300 disabled:cursor-wait disabled:opacity-50"
-                            >
-                                {isEnding ? "Closing…" : role === "A" ? "End room" : "Leave"}
-                            </button>
                         </div>
                     </div>
-                    <div className="mt-2 flex min-w-0 items-center gap-2 truncate text-[11px] text-white/40">
-                        <span className="truncate">{username || "joining..."}</span>
-                        <span className="text-white/20">·</span>
-                        <span className="truncate">Private room · messages expire with the room</span>
+                    <div className="flex shrink-0 items-center gap-2">
+                        {timerText && (
+                            <span
+                                title={endTime || "Room timer starts when everyone joins."}
+                                className={`tabular-nums ${timerColor}`}
+                            >
+                                {timerText}
+                            </span>
+                        )}
+                        {role === "A" && (
+                            <button
+                                type="button"
+                                onClick={() => setPanelOpen(true)}
+                                aria-label="Room settings"
+                                className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-white/70 transition hover:bg-white/10 hover:text-green-300"
+                            >
+                                <Settings size={16} aria-hidden="true" />
+                            </button>
+                        )}
+                        <button
+                            type="button"
+                            onClick={leaveRoom}
+                            disabled={isEnding}
+                            className="cursor-pointer rounded-lg border border-white/10 px-3 py-1.5 text-white/75 transition hover:border-green-400/40 hover:text-green-300 disabled:cursor-wait disabled:opacity-50"
+                        >
+                            {isEnding ? "Closing…" : role === "A" ? "End" : "Leave"}
+                        </button>
                     </div>
                 </div>
             </header>
 
-            <section className="min-h-0 min-w-0 w-full flex-1 overflow-x-clip overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">
+            <section className="min-h-0 min-w-0 w-full flex-1 overflow-x-clip overflow-y-auto overscroll-contain px-4 py-4 sm:px-6">
                 <div className="mx-auto w-full min-w-0 max-w-5xl">
-                    <p className="mb-3 text-xs text-green-700">
-                        <span className="text-green-500">$</span> connected to room {roomCode || code}
-                    </p>
-                    {connectionStatus === "connecting" && (
-                        <p role="status" className="mb-3 text-xs text-yellow-300">Establishing connection…</p>
-                    )}
-                    {connectionStatus === "connected" && (
-                        <p className="mb-5 text-xs text-green-700">Connection established. Your messages appear here.</p>
-                    )}
-
                     {errorText && (
-                        <p role="alert" className="mb-4 break-words rounded-lg border border-red-400/20 bg-red-400/[0.06] px-3 py-2 text-xs text-red-300">
+                        <p role="alert" className="mb-4 break-words rounded-lg bg-red-400/10 px-3 py-2 text-xs text-red-300">
                             {errorText}
                             {connectionStatus === "disconnected" && (
                                 <button
                                     type="button"
                                     onClick={() => {
                                         setRoomError("")
+                                        reconnectAttempt.current = 0
                                         setRetry((attempt) => attempt + 1)
                                     }}
                                     className="ml-3 cursor-pointer text-green-300 underline underline-offset-2"
@@ -787,52 +956,53 @@ function RoomPage() {
                     )}
 
                     {messages.length === 0 && connectionStatus === "connected" && !historyError && (
-                        <p className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-xs text-white/35">
-                            No messages yet. Start the conversation below.
+                        <p className="py-16 text-center text-xs text-white/30">
+                            No messages yet
                         </p>
                     )}
 
-                    <div className="space-y-3">
+                    <div className="space-y-2.5">
                         {messages.map((message) => {
                             const isOwnMessage = message.handle === username
                             if (message.system) {
                                 return (
-                                    <p key={message.id} className="whitespace-pre-wrap break-words rounded-lg border border-amber-300/15 bg-amber-300/[0.05] px-3 py-2 text-xs text-amber-200">
+                                    <p key={message.id} className="whitespace-pre-wrap break-words rounded-lg bg-amber-300/10 px-3 py-2 text-xs text-amber-200">
                                         {message.text}
                                     </p>
                                 )
                             }
-                            const senderColor = isOwnMessage
-                                ? "hsl(142 71% 55%)"
-                                : `hsl(${participantColors.get(message.handle) ?? 210} 75% 68%)`
-                            return <article
-                                key={message.id}
-                                style={{
-                                    borderColor: isOwnMessage
-                                        ? "rgb(74 222 128 / 20%)"
-                                        : `hsl(${participantColors.get(message.handle) ?? 210} 75% 68% / 25%)`,
-                                    backgroundColor: isOwnMessage
-                                        ? "rgb(74 222 128 / 8%)"
-                                        : `hsl(${participantColors.get(message.handle) ?? 210} 75% 68% / 7%)`,
-                                }}
-                                className={`w-fit min-w-0 max-w-[92%] rounded-2xl border px-3.5 py-2.5 sm:max-w-[80%] ${isOwnMessage ? "ml-auto" : ""}`}
-                            >
-                                <div className="mb-1 flex items-center gap-2 text-[11px]">
-                                    <span className="font-semibold" style={{ color: senderColor }}>
-                                        {message.handle}
-                                    </span>
-                                    {message.time && (
-                                        <span className="hidden text-white/30 sm:inline" title={`${message.time} UTC`}>
-                                            {message.time}
+                            const hue = participantColors.get(message.handle) ?? 210
+                            return (
+                                <article
+                                    key={message.id}
+                                    title={message.time || undefined}
+                                    className={`flex min-w-0 max-w-[85%] flex-col sm:max-w-[70%] ${isOwnMessage ? "ml-auto items-end" : "items-start"}`}
+                                >
+                                    {!isOwnMessage && (
+                                        <span
+                                            className="mb-0.5 px-1 text-[11px] font-semibold"
+                                            style={{ color: `hsl(${hue} 75% 68%)` }}
+                                        >
+                                            {message.handle}
                                         </span>
                                     )}
+                                    <div
+                                        style={{
+                                            backgroundColor: isOwnMessage
+                                                ? "rgb(74 222 128 / 14%)"
+                                                : `hsl(${hue} 75% 68% / 10%)`,
+                                        }}
+                                        className="min-w-0 rounded-2xl px-3.5 py-2"
+                                    >
+                                        <p className="whitespace-pre-wrap break-words leading-6 text-white/90">{message.text}</p>
+                                    </div>
                                     {message.delivery && (
-                                        <span className="ml-auto text-[10px] text-white/45" role="status">
+                                        <span className="mt-0.5 px-1 text-[10px] text-white/40" role="status">
                                             {message.delivery === "queued" && "Queued"}
                                             {message.delivery === "sending" && "Sending…"}
                                             {message.delivery === "unconfirmed" && (
                                                 <>
-                                                    Not confirmed
+                                                    Not sent
                                                     <button
                                                         type="button"
                                                         onClick={() => retryMessage(message.id)}
@@ -844,9 +1014,8 @@ function RoomPage() {
                                             )}
                                         </span>
                                     )}
-                                </div>
-                                <p className="whitespace-pre-wrap break-words leading-6 text-white/85">{message.text}</p>
-                            </article>
+                                </article>
+                            )
                         })}
                     </div>
 
@@ -867,7 +1036,7 @@ function RoomPage() {
                             maxLength={4000}
                             autoComplete="off"
                             spellCheck={false}
-                            placeholder={connectionStatus === "connected" ? "type here and press enter..." : "offline"}
+                            placeholder={connectionStatus === "connected" ? "Message" : "Offline"}
                             onChange={(event) => {
                                 setText(event.target.value)
                             }}
@@ -878,63 +1047,148 @@ function RoomPage() {
                                 }
                             }}
                             aria-label="Message"
-                            className="max-h-28 min-h-11 w-0 min-w-0 flex-1 select-text resize-none rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2 text-base leading-6 text-white caret-green-400 outline-none placeholder:text-white/30 focus:border-green-400/50 sm:text-sm"
+                            className="max-h-28 min-h-11 w-0 min-w-0 flex-1 select-text resize-none rounded-xl bg-white/[0.05] px-3.5 py-2.5 text-base leading-6 text-white caret-green-400 outline-none placeholder:text-white/30 focus:bg-white/[0.07] sm:text-sm"
                         />
                         <button
                             type="button"
                             onClick={sendMessage}
                             disabled={!text.trim()}
                             aria-label="Send message"
-                            className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-green-400 px-3 text-sm font-semibold text-black transition hover:bg-green-300 disabled:cursor-not-allowed disabled:opacity-40 sm:px-4"
+                            className="inline-flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl bg-green-400 text-black transition hover:bg-green-300 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                             <Send size={16} />
-                            <span className="hidden sm:inline">Send</span>
                         </button>
                     </div>
-                    <div className="mt-2 flex items-center justify-between text-[10px] text-white/35">
-                        <span className="truncate">Enter to send · Shift+Enter for a new line</span>
-                        <span className="ml-3 shrink-0">{text.length}/4000</span>
-                    </div>
+                    {text.length > 3500 && (
+                        <p className="mt-1.5 text-right text-[10px] text-white/40">{text.length}/4000</p>
+                    )}
                 </div>
             </footer>
 
             {role === "A" && panelOpen && (
                 <aside className="absolute inset-y-0 right-0 z-40 flex w-full max-w-sm flex-col border-l border-white/10 bg-[#0b100d] shadow-2xl">
-                    <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-                        <span className="font-bold text-white">Room settings</span>
+                    <div className="flex items-center justify-between px-4 py-3">
+                        <span className="font-semibold text-white">Settings</span>
                         <button
                             type="button"
                             onClick={() => setPanelOpen(false)}
                             aria-label="Close settings panel"
                             className="cursor-pointer text-white/60 hover:text-white"
                         >
-                            <X size={16} />
+                            <X size={18} />
                         </button>
                     </div>
 
-                    <div className="space-y-2 p-4 text-xs">
-                        <input
-                            type="number"
-                            min={1}
-                            value={limitInput}
-                            onChange={(event) => setLimitInput(event.target.value)}
-                            placeholder="Member limit"
-                            className="w-full select-text rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2 text-white outline-none focus:border-green-400/50"
-                        />
-                        <input
-                            type="datetime-local"
-                            value={endInput}
-                            onChange={(event) => setEndInput(event.target.value)}
-                            className="w-full select-text rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2 text-white outline-none focus:border-green-400/50"
-                        />
+                    <div className="space-y-3 px-4 pb-4 text-xs">
+                        <label className="block">
+                            <span className="mb-1 block text-white/50">Member limit</span>
+                            <input
+                                type="number"
+                                min={1}
+                                max={20}
+                                value={limitInput}
+                                onChange={(event) => setLimitInput(event.target.value)}
+                                placeholder="1-20"
+                                className="w-full select-text rounded-lg bg-white/[0.05] px-3 py-2.5 text-base text-white outline-none placeholder:text-white/25 focus:bg-white/[0.07] sm:text-xs"
+                            />
+                        </label>
+                        <label className="block">
+                            <span className="mb-1 block text-white/50">End time</span>
+                            <input
+                                type="datetime-local"
+                                value={endInput}
+                                onChange={(event) => setEndInput(event.target.value)}
+                                className="w-full select-text rounded-lg bg-white/[0.05] px-3 py-2.5 text-base text-white outline-none focus:bg-white/[0.07] sm:text-xs"
+                            />
+                        </label>
                         <button
                             type="button"
                             onClick={saveSettings}
                             disabled={settingsBusy || (!limitInput.trim() && !endInput)}
-                            className="w-full cursor-pointer rounded-lg bg-green-400 px-3 py-2 font-semibold text-black disabled:opacity-40"
+                            className="w-full cursor-pointer rounded-lg bg-green-400 px-3 py-2.5 font-semibold text-black disabled:opacity-40"
                         >
-                            {settingsBusy ? "Saving…" : "Save settings"}
+                            {settingsBusy ? "Saving…" : "Save"}
                         </button>
+                        {adminInfo && (
+                            <p role="status" className="text-green-300">{adminInfo}</p>
+                        )}
+                    </div>
+
+                    <div className="flex min-h-0 flex-1 flex-col border-t border-white/10 px-4 pt-3 text-xs">
+                        <p className="mb-2 text-white/50">
+                            Members{counts ? ` · ${counts.online} online of ${counts.joined}` : ""}
+                        </p>
+
+                        {membersError && (
+                            <p role="alert" className="mb-2 rounded-lg bg-red-400/10 px-3 py-2 text-red-300">
+                                {membersError}
+                            </p>
+                        )}
+
+                        {adminNotice && (
+                            <div className="mb-2 select-text break-all rounded-lg bg-amber-300/10 px-3 py-2 text-amber-200">
+                                <p className="font-semibold">{adminNotice.username} is now an admin</p>
+                                <p className="mt-1">
+                                    Code: <span className="text-white">{adminNotice.code}</span>
+                                </p>
+                                <p className="mt-1 text-[10px] text-amber-200/70">
+                                    Shown once. Share it privately.
+                                </p>
+                            </div>
+                        )}
+
+                        <ul className="min-h-0 flex-1 divide-y divide-white/5 overflow-y-auto overscroll-contain pb-4">
+                            {members.joined_usernames.map((name) => {
+                                const online = onlineSet.has(name)
+                                const open = selectedMember === name
+                                return (
+                                    <li key={name} className="py-1">
+                                        <button
+                                            type="button"
+                                            onClick={() => setSelectedMember(open ? null : name)}
+                                            className="flex w-full cursor-pointer items-center gap-2.5 py-2 text-left"
+                                        >
+                                            <span
+                                                className={`h-2 w-2 shrink-0 rounded-full ${online ? "bg-green-400" : "bg-white/25"}`}
+                                            />
+                                            <span className="min-w-0 flex-1 truncate text-white/85">
+                                                {name}
+                                                {name === username && <span className="ml-1 text-white/35">(you)</span>}
+                                            </span>
+                                        </button>
+                                        {open && (
+                                            <div className="flex gap-2 pb-2 pl-[18px]">
+                                                <button
+                                                    type="button"
+                                                    disabled={memberBusy !== null}
+                                                    onClick={async () => {
+                                                        await changeAdmin(name, "promote")
+                                                        setSelectedMember(null)
+                                                    }}
+                                                    className="cursor-pointer rounded-lg bg-white/[0.06] px-3 py-1.5 text-white/80 hover:text-green-300 disabled:cursor-wait disabled:opacity-40"
+                                                >
+                                                    {memberBusy === name ? "…" : "Make admin"}
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    disabled={memberBusy !== null}
+                                                    onClick={async () => {
+                                                        await changeAdmin(name, "revoke")
+                                                        setSelectedMember(null)
+                                                    }}
+                                                    className="cursor-pointer rounded-lg bg-white/[0.06] px-3 py-1.5 text-white/80 hover:text-red-300 disabled:cursor-wait disabled:opacity-40"
+                                                >
+                                                    Remove admin
+                                                </button>
+                                            </div>
+                                        )}
+                                    </li>
+                                )
+                            })}
+                            {members.joined_usernames.length === 0 && !membersError && (
+                                <li className="py-2 text-white/35">No members yet</li>
+                            )}
+                        </ul>
                     </div>
                 </aside>
             )}
