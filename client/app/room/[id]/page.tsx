@@ -897,7 +897,7 @@ function RoomPage() {
                             className={`h-2 w-2 shrink-0 rounded-full ${dotColor}`}
                         />
                         <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold text-white">{roomCode || code}</p>
+                            <p className="truncate text-sm font-semibold tracking-wide text-white">darklynk</p>
                             {statusText && (
                                 <p className="truncate text-[11px] text-white/40">{statusText}</p>
                             )}
