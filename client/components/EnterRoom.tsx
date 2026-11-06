@@ -6,24 +6,48 @@ import { Loader2, X } from "lucide-react"
 import { apiErrorMessage, joinRoom } from "../lib/api"
 
 type Modal = { onClose: () => void }
+type Field = "code" | "username"
 
 const CODE_LENGTH = 8
+const MIN_USERNAME_LENGTH = 2
 
-const inputCls =
-    "w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-gray-100 " +
-    "placeholder:text-white/25 outline-none transition hover:border-white/20 " +
+const inputBase =
+    "w-full rounded-lg border bg-white/[0.03] px-3 py-2.5 text-sm text-gray-100 " +
+    "placeholder:text-white/25 outline-none transition "
+const inputValid =
+    "border-white/10 hover:border-white/20 " +
     "focus:border-[#00ff66]/70 focus:bg-[#00ff66]/[0.04] focus:shadow-[0_0_0_3px_rgba(0,255,102,0.12)]"
+const inputInvalid =
+    "border-red-500/70 bg-red-500/[0.05] hover:border-red-500 " +
+    "focus:border-red-500 focus:shadow-[0_0_0_3px_rgba(239,68,68,0.18)]"
 
 const labelCls = "mb-1.5 block text-xs font-medium text-white/70"
+
+// Runs entirely in the browser, so the user sees these before anything is sent to the server.
+function validateField(field: Field, value: string): string {
+    const text = value.trim()
+    if (field === "code") {
+        if (!text) return "Room code is required."
+        if (text.length < CODE_LENGTH) return `Room code must be ${CODE_LENGTH} characters.`
+        return ""
+    }
+    if (!text) return "Username is required."
+    if (text.length < MIN_USERNAME_LENGTH) return `Username must be at least ${MIN_USERNAME_LENGTH} characters.`
+    if (/^\d/.test(text)) return "Username can't start with a number."
+    return ""
+}
 
 const EnterRoom = ({ onClose }: Modal) => {
     const router = useRouter()
     const [code, setCode] = useState("")
     const [username, setUsername] = useState("")
+    const [touched, setTouched] = useState<Record<Field, boolean>>({ code: false, username: false })
     const [error, setError] = useState("")
     const [success, setSuccess] = useState("")
     const [isLoading, setIsLoading] = useState(false)
     const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+    const codeRef = useRef<HTMLInputElement>(null)
+    const usernameRef = useRef<HTMLInputElement>(null)
 
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose()
@@ -34,16 +58,24 @@ const EnterRoom = ({ onClose }: Modal) => {
         }
     }, [onClose])
 
+    // Errors are computed live, so they clear as soon as the value becomes valid.
+    const errors: Record<Field, string> = {
+        code: validateField("code", code),
+        username: validateField("username", username),
+    }
+    const showError = (field: Field) => touched[field] && Boolean(errors[field])
+    const markTouched = (field: Field) => setTouched(t => ({ ...t, [field]: true }))
+
     const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault()
-        if (code.length !== CODE_LENGTH) {
-            setError(`Enter the ${CODE_LENGTH}-character room code.`)
+
+        // Flag every invalid field in red and focus the first one. Nothing is sent to the server.
+        if (errors.code || errors.username) {
+            setTouched({ code: true, username: true })
+            ;(errors.code ? codeRef.current : usernameRef.current)?.focus()
             return
         }
-        if (!username.trim()) {
-            setError("Choose a username to join.")
-            return
-        }
+
         setError("")
         setSuccess("")
         setIsLoading(true)
@@ -122,37 +154,57 @@ const EnterRoom = ({ onClose }: Modal) => {
                         </div>
                     )}
 
-                    <label htmlFor="code" className={labelCls}>Room code</label>
-                    <input
-                        id="code"
-                        type="text"
-                        value={code}
-                        autoFocus
-                        autoComplete="off"
-                        spellCheck={false}
-                        maxLength={CODE_LENGTH}
-                        placeholder="B67H9IS0"
-                        onChange={e => {
-                            setError("")
-                            setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))
-                        }}
-                        className={`${inputCls} mb-4 text-center font-mono text-lg font-semibold tracking-[0.35em] text-[#6dffa6]`}
-                    />
+                    <div className="mb-4">
+                        <label htmlFor="code" className={labelCls}>Room code</label>
+                        <input
+                            id="code"
+                            ref={codeRef}
+                            type="text"
+                            value={code}
+                            autoFocus
+                            autoComplete="off"
+                            spellCheck={false}
+                            maxLength={CODE_LENGTH}
+                            placeholder="B67H9IS0"
+                            aria-invalid={showError("code")}
+                            aria-describedby={showError("code") ? "code-error" : undefined}
+                            onChange={e => {
+                                setError("")
+                                setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))
+                            }}
+                            onBlur={() => markTouched("code")}
+                            className={`${inputBase}${showError("code") ? inputInvalid : inputValid} text-center font-mono text-lg font-semibold tracking-[0.35em] ${showError("code") ? "text-red-300" : "text-[#6dffa6]"}`}
+                        />
+                        {showError("code") && (
+                            <p id="code-error" role="alert" className="mt-1.5 text-xs text-red-400">
+                                {errors.code}
+                            </p>
+                        )}
+                    </div>
 
-                    <label htmlFor="username" className={labelCls}>Username</label>
-                    <div className="relative mb-5">
+                    <div className="mb-5">
+                        <label htmlFor="username" className={labelCls}>Username</label>
                         <input
                             id="username"
+                            ref={usernameRef}
                             type="text"
                             value={username}
                             autoComplete="off"
                             placeholder="anonymous"
+                            aria-invalid={showError("username")}
+                            aria-describedby={showError("username") ? "username-error" : undefined}
                             onChange={e => {
                                 setError("")
                                 setUsername(e.target.value)
                             }}
-                            className={`${inputCls} pl-4 font-mono`}
+                            onBlur={() => markTouched("username")}
+                            className={`${inputBase}${showError("username") ? inputInvalid : inputValid} pl-4 font-mono`}
                         />
+                        {showError("username") && (
+                            <p id="username-error" role="alert" className="mt-1.5 text-xs text-red-400">
+                                {errors.username}
+                            </p>
+                        )}
                     </div>
 
                     <button
