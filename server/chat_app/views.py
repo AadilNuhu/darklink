@@ -467,3 +467,10 @@ class RoomEndView(APIView):
             {"message": "Room ended successfully."},
             status=status.HTTP_200_OK,
         )
+
+
+class HealthCheckView(APIView):
+    """Lightweight health check endpoint for Render and keep-alive pings."""
+
+    def get(self, request):
+        return Response({"status": "ok"}, status=status.HTTP_200_OK)
