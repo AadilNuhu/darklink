@@ -687,3 +687,13 @@ class RoomApiTests(TestCase):
 
         self.assertEqual(cleanup_stale_connections(), (0, 1))
         self.assertFalse(Room.objects.filter(pk=room.pk).exists())
+
+
+class KeepAliveTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+
+    def test_health_check_endpoint(self):
+        response = self.client.get("/health/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, {"status": "ok"})

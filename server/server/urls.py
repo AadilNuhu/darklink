@@ -18,6 +18,7 @@ Including another URLconf
 from django.urls import path
 
 from chat_app.views import (
+    HealthCheckView,
     RoomAdminView,
     RoomCollectionView,
     RoomEndView,
@@ -30,6 +31,7 @@ from chat_app.views import (
 )
 
 urlpatterns = [
+    path("health/", HealthCheckView.as_view(), name="health-check"),
     path("api/rooms/", RoomCollectionView.as_view(), name="room-collection"),
     path(
         "api/rooms/<str:session_code>/join/",
